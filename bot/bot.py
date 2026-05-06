@@ -321,6 +321,47 @@ async def cmd_fornecedor(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except (ValueError, IndexError):
         await update.message.reply_text("Uso: /fornecedor 74890")
 
+# ====================== RESET ======================
+
+async def reset_dia(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Apenas o administrador pode resetar.")
+        return
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🗑️ Sim, limpar hoje", callback_data="resetdia_sim")],
+        [InlineKeyboardButton("❌ Cancelar",          callback_data="cancelar_nao")],
+    ])
+    hoje = datetime.date.today().strftime("%d/%m/%Y")
+    await update.message.reply_text(
+        f"⚠️ <b>Limpar todos os pedidos de {hoje}?</b>\n\n"
+        "Os registros de caixa do dia também serão removidos.\n"
+        "<b>O estoque não será alterado.</b>",
+        parse_mode="HTML",
+        reply_markup=keyboard
+    )
+
+async def reset_completo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Acesso negado.")
+        return
+    if not context.args or context.args[0].lower() != "confirmar":
+        await update.message.reply_text(
+            "⚠️ <b>CUIDADO!</b> Isso apaga TODOS os pedidos e caixa do histórico.\n\n"
+            "Digite <code>/resetcompleto confirmar</code> para confirmar.\n"
+            "O estoque não será alterado.",
+            parse_mode="HTML"
+        )
+        return
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("DELETE FROM itens_pedido")
+    c.execute("DELETE FROM pedidos")
+    c.execute("DELETE FROM caixa")
+    conn.commit()
+    conn.close()
+    await update.message.reply_text("🗑️ Reset completo realizado. Todo o histórico foi apagado.")
+
 # ====================== CANCELAR ÚLTIMO PEDIDO ======================
 
 async def cmd_cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -507,7 +548,27 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     elif query.data == "cancelar_nao":
-        await query.edit_message_text("👍 Pedido mantido. Nenhuma alteração feita.")
+        await query.edit_message_text("👍 Nenhuma alteração feita.")
+
+    elif query.data == "resetdia_sim":
+        if not is_admin(query.from_user.id):
+            await query.edit_message_text("❌ Acesso negado.")
+            return
+        hoje = datetime.date.today().strftime("%Y-%m-%d")
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("DELETE FROM itens_pedido WHERE pedido_id IN (SELECT id FROM pedidos WHERE data LIKE ?)",
+                  (f"{hoje}%",))
+        c.execute("DELETE FROM pedidos WHERE data LIKE ?", (f"{hoje}%",))
+        c.execute("DELETE FROM caixa WHERE data LIKE ?", (f"{hoje}%",))
+        conn.commit()
+        conn.close()
+        hoje_fmt = datetime.date.today().strftime("%d/%m/%Y")
+        await query.edit_message_text(
+            f"🗑️ Pedidos e caixa de <b>{hoje_fmt}</b> apagados.\n"
+            "O estoque não foi alterado.",
+            parse_mode="HTML"
+        )
 
 # ====================== MESSAGE HANDLER ======================
 
@@ -662,7 +723,9 @@ def main():
     app.add_handler(CommandHandler("fornecedor", cmd_fornecedor))
     app.add_handler(CommandHandler("relatorio",  cmd_relatorio))
     app.add_handler(CommandHandler("fechamento", cmd_relatorio))
-    app.add_handler(CommandHandler("cancelar",   cmd_cancelar))
+    app.add_handler(CommandHandler("cancelar",      cmd_cancelar))
+    app.add_handler(CommandHandler("resetdia",      reset_dia))
+    app.add_handler(CommandHandler("resetcompleto", reset_completo))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, processar_mensagem))
 

@@ -1,0 +1,117 @@
+import logging
+import sqlite3
+import datetime
+import re
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
+
+logging.basicConfig(level=logging.INFO)
+
+TOKEN = os.getenv("TOKEN")
+ADMIN_ID = 0  # ← COLOQUE SEU ID AQUI
+CHAVE_PIX = "49988358920"
+
+def is_admin(user_id):
+    return user_id == ADMIN_ID
+
+# ====================== BANCO ======================
+def init_db():
+    conn = sqlite3.connect('controle.db')
+    c = conn.cursor()
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS produtos (
+                 codigo TEXT PRIMARY KEY, nome TEXT, estoque REAL, preco REAL)''')
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS pedidos (
+                 id INTEGER PRIMARY KEY, numero TEXT, cliente TEXT, total REAL,
+                 taxa REAL, pagamento TEXT, responsavel TEXT, data TEXT)''')
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS itens_pedido (
+                 pedido_id INTEGER, produto TEXT, quantidade REAL)''')
+    
+    produtos = [
+        ("ICE", "🍦 Ice o Lator", 375.0, 140.0),
+        ("PAK", "🥐 Pak", 170.0, 60.0),
+        ("CRUMBLE", "🍪 Crumble", 83.0, 180.0),
+        ("POD", "🪦 Pod THC", 8.0, 450.0)
+    ]
+    c.executemany("INSERT OR IGNORE INTO produtos VALUES (?,?,?,?)", produtos)
+    conn.commit()
+    conn.close()
+
+init_db()
+def get_db(): return sqlite3.connect('controle.db')
+
+# ====================== RESET COMANDOS ======================
+async def reset_dia(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Apenas o administrador pode resetar.")
+        return
+
+    data_hoje = datetime.datetime.now().strftime("%Y-%m-%d")
+    conn = get_db()
+    c = conn.cursor()
+    
+    # Deletar pedidos e itens do dia
+    c.execute("DELETE FROM pedidos WHERE data LIKE ?", (data_hoje + '%',))
+    c.execute("DELETE FROM itens_pedido WHERE pedido_id NOT IN (SELECT id FROM pedidos)")
+    
+    conn.commit()
+    conn.close()
+    
+    await update.message.reply_text(
+        "🗑️ **Reset do dia realizado com sucesso!**\n\n"
+        "Todos os pedidos, totais e saídas de hoje foram apagados.\n"
+        "O estoque **não** foi alterado."
+    )
+
+async def reset_completo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Acesso negado.")
+        return
+    
+    if not context.args or context.args[0].lower() != "confirmar":
+        await update.message.reply_text(
+            "⚠️ **CUIDADO!** Isso vai limpar TODOS os pedidos.\n\n"
+            "Digite `/resetcompleto confirmar` para confirmar."
+        )
+        return
+
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("DELETE FROM pedidos")
+    c.execute("DELETE FROM itens_pedido")
+    conn.commit()
+    conn.close()
+    
+    await update.message.reply_text("🗑️ **Reset completo realizado!** Todos os históricos de pedidos foram apagados.")
+
+# ====================== MENU E OUTROS (mantido) ======================
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("📋 Novo Pedido", callback_data="novo_pedido")],
+        [InlineKeyboardButton("📦 Ver Estoque", callback_data="estoque")],
+        [InlineKeyboardButton("📊 Relatório do Dia", callback_data="relatorio")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        "🍪 <b>Cookie Control Pro</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "Comandos de Reset:\n"
+        "/resetdia → Limpar dados de hoje\n"
+        "/resetcompleto confirmar → Limpar tudo",
+        parse_mode='HTML', reply_markup=reply_markup
+    )
+
+# ====================== INICIAR BOT ======================
+app = ApplicationBuilder().token(TOKEN).build()
+
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("resetdia", reset_dia))
+app.add_handler(CommandHandler("resetcompleto", reset_completo))
+
+# Seus outros handlers (novo pedido, etc.) continuam aqui...
+
+print("🚀 Bot com comandos de Reset ativado!")
+app.run_polling()
