@@ -1064,10 +1064,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=(
                     f"🚚 <b>NOVA ENTREGA!</b>\n"
                     f"━━━━━━━━━━━━━━\n"
-                    f"👤 Cliente: {pedido['nome_cliente']}\n"
-                    f"📱 Contato: {pedido['customer_contact']}\n\n"
+                    f"👤 <b>Cliente:</b> {pedido['nome_cliente']}\n"
+                    f"📱 <b>Contato:</b> {pedido['customer_contact']}\n\n"
                     f"{itens_entrega}\n\n"
-                    f"💰 Total: R$ {pedido['total']:.2f} (PIX ✅ confirmado)"
+                    f"💰 Total: R$ {pedido['total']:.2f} (PIX ✅ confirmado)\n\n"
+                    f"⚡ Entre em contato com o cliente para combinar a entrega."
                 ),
                 parse_mode="HTML"
             )
@@ -1078,9 +1079,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             chat_id=customer_id,
             text=(
                 "✅ <b>Pagamento confirmado!</b>\n\n"
-                "🚚 Seu pedido foi aceito e o entregador já foi notificado.\n"
-                "Em breve ele entrará em contato para combinar a entrega.\n\n"
-                "⏰ Horário de entrega: após as 19:30"
+                "🚚 Seu pedido foi aceito!\n\n"
+                f"📱 <b>Contato do entregador:</b> {ENTREGADOR_USERNAME}\n"
+                "Entre em contato com ele para combinar a entrega.\n\n"
+                "⏰ Entregas a partir das 19:30"
             ),
             parse_mode="HTML"
         )
