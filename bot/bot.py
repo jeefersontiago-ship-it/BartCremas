@@ -2863,10 +2863,15 @@ Use português. Para perguntas sobre o estado atual, responda com "chat" e o val
         resp = client.chat.completions.create(
             model="gpt-5-mini",
             messages=[{"role": "system", "content": system}, {"role": "user", "content": texto}],
-            response_format={"type": "json_object"},
             max_completion_tokens=400,
         )
-        result = json.loads(resp.choices[0].message.content)
+        raw = resp.choices[0].message.content or ""
+        # Extrai o primeiro bloco JSON da resposta
+        match = re.search(r'\{.*\}', raw, re.DOTALL)
+        if not match:
+            await update.message.reply_text(f"🤖 {raw}" if raw else "❌ Resposta vazia da IA.")
+            return
+        result = json.loads(match.group())
     except Exception as e:
         await update.message.reply_text(f"❌ Erro ao processar: {e}")
         return
