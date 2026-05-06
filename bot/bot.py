@@ -1564,17 +1564,18 @@ async def handle_comprovante(update: Update, context: ContextTypes.DEFAULT_TYPE)
     taxa_str = f"\n📌 Taxa entrega: R$ {pedido['taxa']:.2f}" if pedido["taxa"] > 0 else ""
 
     msg = (
-        f"🔔 <b>NOVO PEDIDO — AGUARDANDO CONFIRMAÇÃO</b>\n"
+        f"🔔 <b>NOVO PEDIDO — PIX</b>\n"
         f"━━━━━━━━━━━━━━━━━━\n"
-        f"👤 Cliente: {pedido['nome_cliente']} ({contato})\n\n"
+        f"👤 {pedido['nome_cliente']} ({contato})\n\n"
         f"{itens_str}\n"
-        f"💰 Total: R$ {pedido['total']:.2f}{taxa_str}\n"
         f"━━━━━━━━━━━━━━━━━━\n"
-        f"Comprovante PIX acima 👆"
+        f"💰 <b>VALOR ESPERADO: R$ {pedido['total']:.2f}</b>{taxa_str}\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"⚠️ Confira o valor no comprovante acima antes de confirmar!"
     )
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ Confirmar Pagamento", callback_data=f"pgto_ok_{customer_id}")],
-        [InlineKeyboardButton("❌ Recusar Pagamento",   callback_data=f"pgto_rec_{customer_id}")],
+        [InlineKeyboardButton(f"✅ Confirmar R$ {pedido['total']:.2f}", callback_data=f"pgto_ok_{customer_id}")],
+        [InlineKeyboardButton("❌ Recusar Pagamento",                    callback_data=f"pgto_rec_{customer_id}")],
     ])
 
     photo = update.message.photo[-1].file_id
@@ -1880,20 +1881,45 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not is_admin(query.from_user.id):
             await query.answer("❌ Acesso negado.", show_alert=True); return
         conn = get_db(); c = conn.cursor()
-        c.execute("SELECT id, numero, cliente, total, pagamento, data FROM pedidos WHERE status='OK' ORDER BY id DESC LIMIT 1")
-        row = c.fetchone(); conn.close()
-        if not row:
-            await query.edit_message_text("ℹ️ Nenhum pedido para cancelar.",
+        c.execute("""SELECT id, numero, cliente, total, pagamento, data
+                     FROM pedidos WHERE status='OK'
+                     ORDER BY id DESC LIMIT 20""")
+        rows = c.fetchall(); conn.close()
+        if not rows:
+            await query.edit_message_text("ℹ️ Nenhum pedido ativo para cancelar.",
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("← Menu", callback_data="admin_menu_principal")]]))
             return
-        pedido_id, numero, cliente, total, pagamento, data = row
+        kb_rows = []
+        msg = "❌ <b>Cancelar Pedido</b>\n━━━━━━━━━━━━━━━━━━\nSelecione o pedido:\n\n"
+        for ped_id, numero, cliente, total, pagamento, data in rows:
+            hora = data[11:16] if data and len(data) > 10 else ""
+            pag_e = "💳" if pagamento == "PIX" else "💵"
+            msg += f"  <b>#{numero}</b> · {cliente} · R$ {total:.0f} {pag_e} · {hora}\n"
+            kb_rows.append([InlineKeyboardButton(
+                f"❌ #{numero} — {cliente} — R$ {total:.0f}",
+                callback_data=f"cancelar_confirm_{ped_id}"
+            )])
+        kb_rows.append([InlineKeyboardButton("← Voltar", callback_data="admin_menu_principal")])
+        await query.edit_message_text(msg, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb_rows))
+
+    elif query.data.startswith("cancelar_confirm_"):
+        if not is_admin(query.from_user.id):
+            await query.answer("❌ Acesso negado.", show_alert=True); return
+        ped_id = int(query.data.split("_")[-1])
+        conn = get_db(); c = conn.cursor()
+        c.execute("SELECT numero, cliente, total, pagamento FROM pedidos WHERE id=?", (ped_id,))
+        row = c.fetchone(); conn.close()
+        if not row:
+            await query.answer("Pedido não encontrado.", show_alert=True); return
+        numero, cliente, total, pagamento = row
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ Sim, cancelar", callback_data=f"cancelar_sim_{pedido_id}")],
-            [InlineKeyboardButton("❌ Não, manter",   callback_data="admin_menu_principal")],
+            [InlineKeyboardButton("✅ Sim, cancelar",  callback_data=f"cancelar_sim_{ped_id}"),
+             InlineKeyboardButton("← Não, voltar",    callback_data="admin_cancelar")],
         ])
         await query.edit_message_text(
-            f"⚠️ <b>Cancelar último pedido?</b>\n\n"
-            f"🔢 #{numero}  👤 {cliente}\n💰 R$ {total:.2f}  🕐 {data}",
+            f"⚠️ <b>Confirmar cancelamento?</b>\n\n"
+            f"🔢 #{numero}  👤 {cliente}\n💰 R$ {total:.0f}\n\n"
+            f"O estoque será restaurado automaticamente.",
             parse_mode="HTML", reply_markup=kb)
 
     elif query.data == "admin_foto_produtos":
