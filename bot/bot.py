@@ -1184,13 +1184,33 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pedido = context.user_data.get("pedido_pendente")
         if not pedido:
             await query.answer("sessão expirada, use /start", show_alert=True); return
-        user       = query.from_user
-        contato    = f"@{user.username}" if user.username else f"<a href='tg://user?id={user.id}'>{user.first_name}</a>"
-        itens_str  = context.user_data.get("itens_str_cache", "")
-        taxa_str   = context.user_data.get("taxa_str_cache", "")
-        data_now   = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-        numero     = datetime.datetime.now().strftime("%d%H%M")
-        # Salvar pedido no banco como DINHEIRO
+        itens_str = context.user_data.get("itens_str_cache", "")
+        taxa_str  = context.user_data.get("taxa_str_cache", "")
+        msg = (
+            f"💵  <b>CONFIRMAR PEDIDO — DINHEIRO</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n\n"
+            f"{itens_str}\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"{taxa_str}\n"
+            f"💸  <b>Total: R$ {pedido['total']:.0f}</b>\n\n"
+            f"Pagamento em dinheiro na entrega.\n"
+            f"Confirma o pedido?"
+        )
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Confirmar pedido",   callback_data="loja_confirmar_dinheiro")],
+            [InlineKeyboardButton("← Voltar",             callback_data="loja_confirmar")],
+        ])
+        await query.edit_message_text(msg, parse_mode="HTML", reply_markup=kb)
+
+    elif query.data == "loja_confirmar_dinheiro":
+        pedido = context.user_data.get("pedido_pendente")
+        if not pedido:
+            await query.answer("sessão expirada, use /start", show_alert=True); return
+        user      = query.from_user
+        contato   = f"@{user.username}" if user.username else f"<a href='tg://user?id={user.id}'>{user.first_name}</a>"
+        itens_str = context.user_data.get("itens_str_cache", "")
+        data_now  = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+        numero    = datetime.datetime.now().strftime("%d%H%M")
         conn = get_db(); c = conn.cursor()
         c.execute(
             "INSERT INTO pedidos (numero, cliente, total, taxa, pagamento, responsavel, data, status) VALUES (?,?,?,?,?,?,?,?)",
@@ -1205,22 +1225,23 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                   (pedido["total"], f"Pedido #{numero} DINHEIRO", data_now))
         conn.commit(); conn.close()
         context.user_data.clear()
-        # Notificar admin
-        msg_admin = (
-            f"💵 <b>NOVO PEDIDO — DINHEIRO</b>\n"
-            f"━━━━━━━━━━━━━━━━━━\n"
-            f"👤 Cliente: {pedido['nome_cliente']} ({contato})\n\n"
-            f"{itens_str}\n"
-            f"💰 Total: R$ {pedido['total']:.2f}  [paga na entrega]\n"
-            f"━━━━━━━━━━━━━━━━━━"
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=(
+                f"💵 <b>NOVO PEDIDO — DINHEIRO</b>\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"👤 Cliente: {pedido['nome_cliente']} ({contato})\n\n"
+                f"{itens_str}\n"
+                f"💰 Total: R$ {pedido['total']:.2f}  [paga na entrega]\n"
+                f"━━━━━━━━━━━━━━━━━━"
+            ),
+            parse_mode="HTML"
         )
-        await context.bot.send_message(chat_id=ADMIN_ID, text=msg_admin, parse_mode="HTML")
-        # Notificar entregador
         try:
             await context.bot.send_message(
                 chat_id=ENTREGADOR_USERNAME,
                 text=(
-                    f"📥 <b>PEDIDO RECEBIDO — DINHEIRO</b>\n"
+                    f"📥 <b>PEDIDO — DINHEIRO</b>\n"
                     f"━━━━━━━━━━━━━━\n"
                     f"👤 Cliente: {pedido['nome_cliente']}\n"
                     f"📱 Contato: {contato}\n\n"
@@ -1231,7 +1252,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         except Exception as e:
             logging.warning(f"Não foi possível notificar entregador (dinheiro): {e}")
-        # Confirmar para o cliente
         await query.edit_message_text(
             f"✅ <b>Pedido confirmado!</b>\n\n"
             f"💵 Pagamento em dinheiro na entrega.\n"
