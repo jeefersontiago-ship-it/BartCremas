@@ -32,6 +32,23 @@ PRODUTOS_INFO = {
     "POD_S":   ("🌿 Pod THC Sativa",  450.0, "un"),
 }
 
+# Estoque de referência para cálculo da barra visual (máximo esperado)
+ESTOQUE_MAX_REF = {
+    "ICE":     200.0,
+    "PAK":     500.0,
+    "CRUMBLE": 300.0,
+    "POD_I":    20.0,
+    "POD_S":    20.0,
+}
+
+def barra_estoque(qtd: float, max_ref: float, largura: int = 10) -> str:
+    if qtd <= 0:
+        return "░" * largura
+    ratio  = min(1.0, qtd / max_ref)
+    cheios = max(1, round(ratio * largura))
+    vazios = largura - cheios
+    return "▓" * cheios + "░" * vazios
+
 def is_admin(user_id):
     return ADMIN_ID != 0 and user_id == ADMIN_ID
 
@@ -254,16 +271,68 @@ def build_relatorio_periodo(data_ini: str, data_fim: str, titulo: str) -> str:
     return rel
 
 def build_estoque_text():
-    conn = get_db()
-    c = conn.cursor()
-    c.execute("SELECT codigo, nome, estoque, preco_venda FROM produtos")
+    hoje     = datetime.date.today().strftime("%Y-%m-%d")
+    hoje_fmt = datetime.date.today().strftime("%d/%m/%Y")
+    hora     = datetime.datetime.now().strftime("%H:%M")
+
+    conn = get_db(); c = conn.cursor()
+    c.execute("SELECT codigo, nome, estoque, preco_venda FROM produtos ORDER BY codigo")
     rows = c.fetchall()
+
+    # Saídas do dia por produto
+    c.execute("""
+        SELECT i.produto, SUM(i.quantidade)
+        FROM itens_pedido i JOIN pedidos p ON i.pedido_id = p.id
+        WHERE p.data LIKE ? AND p.status != 'CANCELADO'
+        GROUP BY i.produto
+    """, (f"{hoje}%",))
+    saidas_dia = dict(c.fetchall())
+
+    # Total de pedidos e faturamento hoje
+    c.execute(
+        "SELECT COUNT(*), COALESCE(SUM(total),0) FROM pedidos WHERE data LIKE ? AND status!='CANCELADO'",
+        (f"{hoje}%",)
+    )
+    qtd_ped, total_dia = c.fetchone()
     conn.close()
-    texto = "📦 <b>ESTOQUE ATUAL</b>\n━━━━━━━━━━━━━━\n\n"
-    for cod, nome, qtd, preco in rows:
+
+    texto  = f"📦 <b>ESTOQUE ATUAL</b>\n"
+    texto += f"📅 {hoje_fmt}  ·  🕐 {hora}\n"
+    texto += f"━━━━━━━━━━━━━━━━━━━━\n\n"
+
+    valor_total = 0.0
+    for cod, nome_db, qtd, preco in rows:
         if cod not in PRODUTOS_INFO:
             continue
-        texto += f"{estoque_emoji(qtd)} {nome}: <b>{qtd:.1f}</b> | R$ {preco:.2f}/un\n"
+        nome_emoji, _, unidade = PRODUTOS_INFO[cod]
+        max_ref  = ESTOQUE_MAX_REF.get(cod, 100)
+        barra    = barra_estoque(qtd, max_ref)
+        saiu     = saidas_dia.get(cod, 0.0)
+        v_est    = qtd * preco
+        valor_total += v_est
+        pct      = int(min(100, (qtd / max_ref) * 100)) if max_ref > 0 else 0
+
+        if qtd <= 0:
+            st = "❌ SEM ESTOQUE"
+        elif qtd <= 20:
+            st = "⚠️ BAIXO"
+        else:
+            st = "✅ OK"
+
+        qtd_str  = f"{qtd:.0f}" if qtd == int(qtd) else f"{qtd:.1f}"
+        saiu_str = f"{saiu:.0f}" if saiu == int(saiu) else f"{saiu:.1f}"
+
+        texto += f"<b>{nome_emoji}</b>  {st}\n"
+        texto += f"  <code>{barra}</code>  {pct}%\n"
+        texto += f"  📊 Estoque: <b>{qtd_str} {unidade}</b>  ·  💰 R$ {preco:.0f}/{unidade}\n"
+        texto += f"  📉 Saiu hoje: <b>{saiu_str} {unidade}</b>"
+        if saiu > 0:
+            texto += f"  ·  💵 R$ {saiu * preco:.0f}"
+        texto += "\n\n"
+
+    texto += f"━━━━━━━━━━━━━━━━━━━━\n"
+    texto += f"🧾 Pedidos hoje: <b>{qtd_ped}</b>  ·  💰 Faturado: <b>R$ {total_dia:.0f}</b>\n"
+    texto += f"📦 Valor em estoque: <b>R$ {valor_total:,.0f}</b>"
     return texto
 
 def build_pedidos_dia_text(hoje: str) -> str:
