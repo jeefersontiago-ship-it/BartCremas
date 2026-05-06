@@ -5,6 +5,7 @@ import re
 import os
 import json
 from zoneinfo import ZoneInfo
+from openai import OpenAI
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
@@ -20,6 +21,16 @@ ADMIN_ID             = int(os.getenv("ADMIN_ID", "0"))
 CHAVE_PIX            = os.getenv("CHAVE_PIX", "")
 DB_PATH              = os.path.join(os.path.dirname(__file__), "controle.db")
 ENTREGADOR_USERNAME  = "@jRDG7"
+
+_ai_client = None
+def get_ai_client():
+    global _ai_client
+    if _ai_client is None:
+        _ai_client = OpenAI(
+            base_url=os.getenv("AI_INTEGRATIONS_OPENAI_BASE_URL"),
+            api_key=os.getenv("AI_INTEGRATIONS_OPENAI_API_KEY"),
+        )
+    return _ai_client
 
 # Pedidos de clientes aguardando confirmação de pagamento (em memória)
 pedidos_pendentes: dict = {}  # customer_chat_id -> order_data
@@ -2795,6 +2806,156 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await query.edit_message_caption("❌ Pagamento recusado. Cliente notificado.")
 
+# ====================== ASSISTENTE IA ADMIN ======================
+
+async def handle_admin_ai(update: Update, context: ContextTypes.DEFAULT_TYPE, texto: str):
+    conn = get_db(); c = conn.cursor()
+    c.execute("SELECT codigo, nome, estoque, preco_venda FROM produtos ORDER BY nome")
+    produtos = c.fetchall()
+    conn.close()
+    saldo_banco = get_config("saldo_banco")
+    divida      = get_config("divida_fornecedor")
+    loja_status = "aberta" if loja_esta_aberta() else "fechada"
+    estoque_str = "\n".join(f"  {cod} ({nome}): {est:.1f} un · R${preco:.0f}" for cod, nome, est, preco in produtos)
+
+    system = f"""Você é o assistente de controle de estoque e caixa da Diesel Farm.
+Estado atual:
+- Loja: {loja_status}
+- Saldo banco: R$ {saldo_banco:.0f}
+- Dívida fornecedor: R$ {divida:.0f}
+- Estoque:
+{estoque_str}
+
+Responda SEMPRE com JSON válido. Ações disponíveis:
+
+1. Consulta / conversa simples:
+   {{"acao":"chat","resposta":"texto"}}
+
+2. Adicionar estoque:
+   {{"acao":"add_estoque","produto":"ICE|PAK|CRUMBLE|POD_I|POD_S","quantidade":N}}
+
+3. Remover estoque (saída de produto):
+   {{"acao":"rem_estoque","produto":"ICE|PAK|CRUMBLE|POD_I|POD_S","quantidade":N}}
+
+4. Registrar venda manual (entrada no caixa + baixa no estoque):
+   {{"acao":"venda","produto":"ICE|PAK|CRUMBLE|POD_I|POD_S","quantidade":N,"valor":N,"pagamento":"PIX|DINHEIRO","cliente":"nome"}}
+
+5. Registrar saída de caixa:
+   {{"acao":"saida_caixa","valor":N,"descricao":"motivo"}}
+
+6. Atualizar saldo do banco:
+   {{"acao":"set_banco","valor":N}}
+
+7. Atualizar dívida do fornecedor:
+   {{"acao":"set_fornecedor","valor":N}}
+
+8. Abrir ou fechar loja:
+   {{"acao":"set_loja","aberta":true}}
+
+9. Registrar retirada de sócio:
+   {{"acao":"retirada","socio":"Bart|RD","valor":N}}
+
+Use português. Para perguntas sobre o estado atual, responda com "chat" e o valor. Não invente dados.
+"""
+    try:
+        await context.bot.send_chat_action(update.effective_chat.id, action="typing")
+        client = get_ai_client()
+        resp = client.chat.completions.create(
+            model="gpt-5-mini",
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": texto}],
+            response_format={"type": "json_object"},
+            max_tokens=400,
+        )
+        result = json.loads(resp.choices[0].message.content)
+    except Exception as e:
+        await update.message.reply_text(f"❌ Erro ao processar: {e}")
+        return
+
+    acao = result.get("acao", "chat")
+    now  = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    if acao == "chat":
+        await update.message.reply_text(result.get("resposta", "🤖"), parse_mode="HTML")
+
+    elif acao in ("add_estoque", "rem_estoque"):
+        prod = result.get("produto", "").upper()
+        qtd  = float(result.get("quantidade", 0))
+        if prod not in CODIGOS or qtd <= 0:
+            await update.message.reply_text("❌ Produto ou quantidade inválido."); return
+        conn = get_db(); c = conn.cursor()
+        op = "+" if acao == "add_estoque" else "-"
+        c.execute(f"UPDATE produtos SET estoque = estoque {op} ? WHERE codigo = ?", (qtd, prod))
+        c.execute("SELECT estoque, nome FROM produtos WHERE codigo = ?", (prod,))
+        novo, nome = c.fetchone(); conn.commit(); conn.close()
+        aviso = "\n🚨 <b>ESTOQUE ZERADO!</b>" if novo <= 0 else ("\n⚠️ Estoque baixo!" if novo <= 20 else "")
+        sinal = "+" if acao == "add_estoque" else "-"
+        await update.message.reply_text(
+            f"✅ <b>{nome}</b> {sinal}{qtd:.1f}\n📦 Estoque agora: <b>{novo:.1f}</b>{aviso}",
+            parse_mode="HTML")
+
+    elif acao == "venda":
+        prod     = result.get("produto", "").upper()
+        qtd      = float(result.get("quantidade", 0))
+        valor    = float(result.get("valor", 0))
+        pag      = result.get("pagamento", "PIX").upper()
+        cliente  = result.get("cliente", "Manual")
+        if prod not in CODIGOS or qtd <= 0 or valor <= 0:
+            await update.message.reply_text("❌ Dados inválidos para a venda."); return
+        numero = datetime.datetime.now().strftime("%d%H%M")
+        conn = get_db(); c = conn.cursor()
+        c.execute("INSERT INTO pedidos (numero, cliente, total, taxa, pagamento, responsavel, data, status) VALUES (?,?,?,?,?,?,?,?)",
+                  (numero, cliente, valor, 0, pag, "Manual-IA", now, "OK"))
+        ped_id = c.lastrowid
+        c.execute("INSERT INTO itens_pedido (pedido_id, produto, quantidade) VALUES (?,?,?)", (ped_id, prod, qtd))
+        c.execute("UPDATE produtos SET estoque = estoque - ? WHERE codigo = ?", (qtd, prod))
+        c.execute("SELECT nome FROM produtos WHERE codigo = ?", (prod,))
+        nome = c.fetchone()[0]
+        conn.commit(); conn.close()
+        registrar_caixa("entrada", valor, f"Pedido #{numero} {pag} (IA)")
+        await update.message.reply_text(
+            f"✅ <b>Venda registrada</b>\n👤 {cliente}\n{qtd:.1f}× {nome}\n💰 R$ {valor:.0f} — {pag}",
+            parse_mode="HTML")
+
+    elif acao == "saida_caixa":
+        valor = float(result.get("valor", 0))
+        desc  = result.get("descricao", "Saída manual")
+        if valor <= 0:
+            await update.message.reply_text("❌ Valor inválido."); return
+        registrar_caixa("saida", valor, desc)
+        await update.message.reply_text(f"✅ <b>Saída registrada</b>\n💸 R$ {valor:.0f} — {desc}", parse_mode="HTML")
+
+    elif acao == "set_banco":
+        valor = float(result.get("valor", 0))
+        set_config("saldo_banco", valor)
+        await update.message.reply_text(f"✅ <b>Saldo Banco</b> atualizado: R$ {valor:.0f}", parse_mode="HTML")
+
+    elif acao == "set_fornecedor":
+        valor = float(result.get("valor", 0))
+        set_config("divida_fornecedor", valor)
+        await update.message.reply_text(f"✅ <b>Dívida Fornecedor</b> atualizada: R$ {valor:.0f}", parse_mode="HTML")
+
+    elif acao == "set_loja":
+        aberta = bool(result.get("aberta", True))
+        set_config("loja_aberta", 1 if aberta else 0)
+        status = "🟢 Loja ABERTA" if aberta else "🔴 Loja FECHADA"
+        await update.message.reply_text(f"✅ {status}", parse_mode="HTML")
+
+    elif acao == "retirada":
+        socio = result.get("socio", "Bart")
+        valor = float(result.get("valor", 0))
+        if valor <= 0:
+            await update.message.reply_text("❌ Valor inválido."); return
+        registrar_caixa("saida", valor, f"Retirada {socio}")
+        conn = get_db(); c = conn.cursor()
+        c.execute("INSERT INTO retiradas (socio, valor, data) VALUES (?,?,?)", (socio, valor, now))
+        conn.commit(); conn.close()
+        await update.message.reply_text(
+            f"✅ <b>Retirada {socio}</b>: R$ {valor:.0f}", parse_mode="HTML")
+
+    else:
+        await update.message.reply_text("🤖 " + result.get("resposta", "Não entendi o comando."))
+
+
 # ====================== MESSAGE HANDLER ======================
 
 async def processar_mensagem(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3099,8 +3260,13 @@ async def processar_mensagem(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     await update.message.reply_text(
                         f"✅ {nome} -{qtd:.1f}\n📦 Agora: {novo:.1f}{aviso}",
                         parse_mode="HTML")
+                    return
                 except ValueError:
                     pass
+        # Admin sem padrão reconhecido → Assistente IA
+        if is_admin(update.effective_user.id):
+            await handle_admin_ai(update, context, texto)
+            return
         return
 
     # --- Parser de pedido colado (requer "pedido" ou "total") ---
