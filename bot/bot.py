@@ -768,7 +768,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             unidade = PRODUTOS_INFO[cod][2]
             status  = "🟢" if estoque > 0 else "🔴 esgotado"
             msg += f"{status}  {nome}\n    R$ {preco:.0f}/{unidade}\n\n"
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🛒  pedir agora", callback_data="loja_iniciar")]])
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🛒  pedir agora", callback_data="loja_iniciar")],
+            [InlineKeyboardButton("← voltar",        callback_data="loja_menu")],
+        ])
         await query.edit_message_text(msg, parse_mode="HTML", reply_markup=kb)
 
     elif query.data.startswith("loja_add_") or query.data.startswith("loja_rem_"):
@@ -833,7 +836,31 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"<code>{CHAVE_PIX}</code>\n\n"
             f"manda o comprovante aqui como foto após pagar 👇"
         )
-        await query.edit_message_text(msg, parse_mode="HTML")
+        kb_pix = InlineKeyboardMarkup([
+            [InlineKeyboardButton("← voltar ao carrinho", callback_data="loja_voltar_carrinho")],
+            [InlineKeyboardButton("✖ cancelar pedido",    callback_data="loja_cancelar")],
+        ])
+        await query.edit_message_text(msg, parse_mode="HTML", reply_markup=kb_pix)
+
+    elif query.data == "loja_voltar_carrinho":
+        carrinho = context.user_data.get("carrinho", {c: 0 for c in PRODUTOS_INFO})
+        context.user_data["estado"] = "cliente_carrinho"
+        context.user_data.pop("pedido_pendente", None)
+        await query.edit_message_text(
+            build_cart_text(carrinho),
+            parse_mode="HTML",
+            reply_markup=build_cart_keyboard(carrinho)
+        )
+
+    elif query.data == "loja_menu":
+        context.user_data.clear()
+        await query.edit_message_text(
+            "🖤  <b>STORE</b>\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "entrega a partir das 19:30",
+            parse_mode="HTML",
+            reply_markup=customer_keyboard()
+        )
 
     elif query.data == "loja_cancelar":
         context.user_data.clear()
