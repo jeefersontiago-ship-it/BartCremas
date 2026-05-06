@@ -390,25 +390,13 @@ async def salvar_pedido_guiado(update: Update, context: ContextTypes.DEFAULT_TYP
 
     registrar_caixa("entrada", total, f"Pedido #{numero} - {cliente}")
 
-    # Mensagem pronta para copiar e enviar ao cliente
-    cliente_msg  = f"✅ <b>Pedido Confirmado!</b>\n\n"
-    cliente_msg += f"Olá <b>{cliente}</b>!\n\n"
-    cliente_msg += "Seu pedido foi registrado:\n\n"
-    for p, q in itens.items():
-        cliente_msg += f"   • {q:.1f} × {p}\n"
-    if taxa > 0:
-        cliente_msg += f"\n📌 Taxa de entrega: R$ {taxa:.2f}"
-    cliente_msg += f"\n💎 <b>Total: R$ {total:.2f}</b>\n\n"
-    if CHAVE_PIX:
-        cliente_msg += f"🔑 <b>Chave PIX:</b> <code>{CHAVE_PIX}</code>\n"
-        cliente_msg += f"💵 Valor exato: <code>R$ {total:.2f}</code>\n\n"
-    cliente_msg += "Por favor, envie o comprovante após o pagamento. 🙏"
-
     await update.message.reply_text(
-        f"✅ <b>Pedido #{numero} salvo!</b>\n\n"
-        "📄 <b>Mensagem pronta para o cliente:</b>\n"
-        "━━━━━━━━━━━━━━━━━━\n\n"
-        + cliente_msg,
+        f"✅ <b>Pedido #{numero} confirmado com sucesso!</b>\n\n"
+        f"👤 Cliente: {cliente}\n"
+        f"💰 Total: R$ {total:.2f}\n\n"
+        "🚚 Seu pedido foi confirmado.\n"
+        "Em breve o entregador entrará em contato para realizar a entrega.\n\n"
+        "⏰ Lembrando que o horário de entrega é após as 19:30.",
         parse_mode="HTML"
     )
     context.user_data.clear()
