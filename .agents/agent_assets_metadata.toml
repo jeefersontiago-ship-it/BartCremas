@@ -12,6 +12,12 @@ uri = "file://attached_assets/generated_images/bart_cremas_bcn.png"
 type = "image"
 title = "bart cremas barcelona art"
 
+[[generated]]
+id = "foNEewPBatwsoUFoYxXpH"
+uri = "file://attached_assets/generated_images/bart_cremas_bcn_simpson.png"
+type = "image"
+title = "bart simpson barcelona street art"
+
 [[outputs]]
 id = "9zn_vTsVDL2NJXlbB2uz0"
 uri = "file://attached_assets/generated_images/bart_cremas.png"
@@ -23,3 +29,9 @@ id = "4z8lueF0ew7klwJmHA8zC"
 uri = "file://attached_assets/generated_images/bart_cremas_bcn.png"
 type = "image"
 title = "Bart Cremas — Referência Barcelona"
+
+[[outputs]]
+id = "4cyRwpUjhIspoSMXcq3LP"
+uri = "file://attached_assets/generated_images/bart_cremas_bcn_simpson.png"
+type = "image"
+title = "Bart Cremas — Barcelona Street + Bart Simpson"
