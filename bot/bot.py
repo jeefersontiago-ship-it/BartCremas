@@ -987,11 +987,66 @@ def build_retiradas_socio_text(socio: str) -> str:
     msg += f"📊 Total histórico: <b>R$ {total:.0f}</b>"
     return msg
 
+def build_saldo_banco_text() -> str:
+    saldo_banco = get_config("saldo_banco")
+    divida      = get_config("divida_fornecedor")
+    conn = get_db(); c = conn.cursor()
+
+    # Últimas movimentações do caixa (todas, não só hoje)
+    c.execute("""
+        SELECT tipo, valor, descricao, data FROM caixa
+        ORDER BY id DESC LIMIT 30
+    """)
+    movs = c.fetchall()
+
+    # Totais gerais
+    c.execute("SELECT COALESCE(SUM(valor),0) FROM caixa WHERE tipo='entrada'")
+    tot_ent_all = c.fetchone()[0]
+    c.execute("SELECT COALESCE(SUM(valor),0) FROM caixa WHERE tipo='saida'")
+    tot_sai_all = c.fetchone()[0]
+
+    # Totais de hoje
+    hoje = datetime.date.today().strftime("%Y-%m-%d")
+    c.execute("SELECT COALESCE(SUM(valor),0) FROM caixa WHERE tipo='entrada' AND data LIKE ?", (f"{hoje}%",))
+    ent_hoje = c.fetchone()[0]
+    c.execute("SELECT COALESCE(SUM(valor),0) FROM caixa WHERE tipo='saida' AND data LIKE ?", (f"{hoje}%",))
+    sai_hoje = c.fetchone()[0]
+    conn.close()
+
+    msg  = "🏦 <b>SALDO BANCO</b>\n"
+    msg += "━━━━━━━━━━━━━━━━━━━━\n\n"
+    msg += f"💰 <b>Saldo atual: R$ {saldo_banco:.2f}</b>\n"
+    if divida > 0:
+        msg += f"📉 Dívida fornecedor: R$ {divida:.0f}\n"
+        msg += f"📊 Patrimônio líquido: <b>R$ {saldo_banco - divida:.2f}</b>\n"
+    msg += "\n"
+    msg += f"📅 Hoje  ·  📥 +R$ {ent_hoje:.0f}  ·  📤 -R$ {sai_hoje:.0f}\n"
+    msg += "\n━━━━━━━━━━━━━━━━━━━━\n"
+    msg += "🕐 <b>Últimas movimentações</b>\n\n"
+
+    if movs:
+        for tipo, valor, desc, data_raw in movs:
+            try:
+                dt  = datetime.datetime.strptime(data_raw[:10], "%Y-%m-%d").strftime("%d/%m")
+                hora = data_raw[11:16] if len(data_raw) > 10 else ""
+                dt_str = f"{dt} {hora}".strip()
+            except Exception:
+                dt_str = data_raw[:16]
+            sinal = "📥 +" if tipo == "entrada" else "📤 -"
+            msg += f"  {sinal}R$ {valor:.0f}  <i>{desc}</i>  <code>{dt_str}</code>\n"
+    else:
+        msg += "  <i>Nenhuma movimentação.</i>\n"
+
+    msg += f"\n━━━━━━━━━━━━━━━━━━━━\n"
+    msg += f"📥 Total entradas: R$ {tot_ent_all:.0f}\n"
+    msg += f"📤 Total saídas:   R$ {tot_sai_all:.0f}"
+    return msg
+
 def admin_financeiro_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("💰 Retiradas Bart & RD", callback_data="retiradas_menu")],
         [InlineKeyboardButton("💸 Saída de Caixa",     callback_data="admin_saida_input"),
-         InlineKeyboardButton("🏦 Saldo Banco",        callback_data="admin_banco_input")],
+         InlineKeyboardButton("🏦 Saldo Banco",        callback_data="saldo_banco_menu")],
         [InlineKeyboardButton("🏭 Dívida Fornecedor",  callback_data="admin_fornecedor_input")],
         [InlineKeyboardButton("📅 Relatório por Data",    callback_data="admin_relatorio_data")],
         [InlineKeyboardButton("📅 Relatório Semanal",   callback_data="relatorio_semanal"),
@@ -1823,6 +1878,15 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]]))
 
     # --- Inputs guiados ---
+    elif query.data == "saldo_banco_menu":
+        if not is_admin(query.from_user.id):
+            await query.answer("❌ Acesso negado.", show_alert=True); return
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✏️ Ajustar Saldo",    callback_data="admin_banco_input")],
+            [InlineKeyboardButton("← Financeiro",         callback_data="admin_menu_financeiro")],
+        ])
+        await query.edit_message_text(build_saldo_banco_text(), parse_mode="HTML", reply_markup=kb)
+
     elif query.data == "retiradas_menu":
         if not is_admin(query.from_user.id):
             await query.answer("❌ Acesso negado.", show_alert=True); return
@@ -2821,8 +2885,12 @@ async def processar_mensagem(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 valor = float(texto.replace(",", ".").replace("R$", "").strip())
                 set_config("saldo_banco", valor)
                 context.user_data["estado"] = None
+                kb_banco = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🏦 Ver Saldo Banco", callback_data="saldo_banco_menu")],
+                    [InlineKeyboardButton("← Menu",             callback_data="admin_menu_principal")],
+                ])
                 await update.message.reply_text(
-                    f"✅ <b>Saldo Banco</b> atualizado: R$ {valor:.2f}", parse_mode="HTML", reply_markup=kb_menu)
+                    f"✅ <b>Saldo Banco</b> atualizado: R$ {valor:.2f}", parse_mode="HTML", reply_markup=kb_banco)
             except ValueError:
                 await update.message.reply_text("❌ Valor inválido. Ex: <code>3400</code>", parse_mode="HTML")
 
