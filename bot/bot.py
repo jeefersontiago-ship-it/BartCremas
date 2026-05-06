@@ -1116,8 +1116,25 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif query.data == "loja_iniciar":
         if not loja_esta_aberta():
-            await query.answer("🔴 Estamos fechados no momento! Voltamos em breve.", show_alert=True)
+            await query.answer("🔴 Estamos fechados no momento!\nHorário: 08:00 às 19:00", show_alert=True)
             return
+        # Limite de 10 pedidos por dia (dias de semana)
+        hoje = datetime.date.today()
+        if hoje.weekday() < 5:  # 0=seg … 4=sex
+            conn_lim = get_db(); c_lim = conn_lim.cursor()
+            c_lim.execute(
+                "SELECT COUNT(*) FROM pedidos WHERE data LIKE ? AND responsavel='Loja-Bot' AND status!='CANCELADO'",
+                (hoje.strftime("%Y-%m-%d") + "%",)
+            )
+            qtd_hoje = c_lim.fetchone()[0]; conn_lim.close()
+            if qtd_hoje >= 10:
+                await query.answer(
+                    "🚫 Limite de pedidos atingido!\n"
+                    "Aceitamos no máximo 10 pedidos por dia.\n"
+                    "Tente novamente amanhã.",
+                    show_alert=True
+                )
+                return
         context.user_data.clear()
         context.user_data["carrinho"] = {c: 0 for c in PRODUTOS_INFO}
         context.user_data["estado"]   = "cliente_carrinho"
@@ -1964,7 +1981,7 @@ async def job_abrir_loja(context: ContextTypes.DEFAULT_TYPE):
                 text=(
                     "🟢 <b>LOJA ABERTA</b>\n"
                     "━━━━━━━━━━━━━━\n\n"
-                    "Abertura automática às 19:00.\n\n"
+                    "Abertura automática às 08:00.\n\n"
                     + estoque
                 ),
                 parse_mode="HTML"
@@ -1984,7 +2001,7 @@ async def job_fechar_loja(context: ContextTypes.DEFAULT_TYPE):
                 text=(
                     "🔴 <b>LOJA FECHADA</b>\n"
                     "━━━━━━━━━━━━━━\n\n"
-                    "Fechamento automático às 23:30.\n\n"
+                    "Fechamento automático às 19:00.\n\n"
                     + rel
                 ),
                 parse_mode="HTML"
@@ -2063,12 +2080,12 @@ def main():
     # ── Agendamentos automáticos (fuso horário Brasília) ──
     BR_TZ = ZoneInfo("America/Sao_Paulo")
     jq    = app.job_queue
-    # Abre loja às 19:00 e checa estoque
-    jq.run_daily(job_abrir_loja,       datetime.time(19,  0, 0, tzinfo=BR_TZ))
-    # Fecha loja às 23:30 e envia relatório do dia
-    jq.run_daily(job_fechar_loja,      datetime.time(23, 30, 0, tzinfo=BR_TZ))
-    # Checagem de estoque toda manhã às 10:00
-    jq.run_daily(job_verificar_estoque, datetime.time(10,  0, 0, tzinfo=BR_TZ))
+    # Abre loja às 08:00 e checa estoque
+    jq.run_daily(job_abrir_loja,        datetime.time( 8,  0, 0, tzinfo=BR_TZ))
+    # Fecha loja às 19:00 e envia relatório do dia
+    jq.run_daily(job_fechar_loja,       datetime.time(19,  0, 0, tzinfo=BR_TZ))
+    # Checagem de estoque às 07:30 (antes da abertura)
+    jq.run_daily(job_verificar_estoque, datetime.time( 7, 30, 0, tzinfo=BR_TZ))
 
     logging.info("Bot iniciado...")
     app.run_polling()
