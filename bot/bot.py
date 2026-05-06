@@ -224,23 +224,46 @@ def main_keyboard():
 
 def customer_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🛒 Fazer Pedido",           callback_data="loja_iniciar")],
-        [InlineKeyboardButton("📋 Ver Produtos e Preços",  callback_data="loja_produtos")],
+        [InlineKeyboardButton("🛒  pedir agora",     callback_data="loja_iniciar")],
+        [InlineKeyboardButton("📦  ver cardápio",    callback_data="loja_produtos")],
     ])
+
+def build_cart_text(carrinho: dict) -> str:
+    subtotal = sum(carrinho.get(cod, 0) * PRODUTOS_INFO[cod][1] for cod in PRODUTOS_INFO)
+    taxa     = 10.0 if 0 < subtotal < 500 else 0.0
+    total    = subtotal + taxa
+
+    linhas = "🛒  <b>CARRINHO</b>\n━━━━━━━━━━━━━━━━━━\n\n"
+    tem_item = False
+    for cod, (nome, preco, unidade) in PRODUTOS_INFO.items():
+        qtd = carrinho.get(cod, 0)
+        if qtd > 0:
+            tem_item = True
+            linhas += f"  {nome}  ×{qtd}   <b>R$ {qtd * preco:.0f}</b>\n"
+    if not tem_item:
+        linhas += "  <i>nenhum item ainda — use ➕</i>\n"
+    linhas += "\n━━━━━━━━━━━━━━━━━━\n"
+    if taxa > 0:
+        linhas += f"  entrega: R$ {taxa:.0f}\n"
+    linhas += f"💸  <b>Total: R$ {total:.0f}</b>"
+    return linhas
 
 def build_cart_keyboard(carrinho: dict) -> InlineKeyboardMarkup:
     rows = []
     for cod, (nome, preco, unidade) in PRODUTOS_INFO.items():
         qtd = carrinho.get(cod, 0)
-        rows.append([InlineKeyboardButton(f"{nome}  •  R${preco:.0f}/{unidade}", callback_data="noop")])
+        label_qtd = f"{'🔥 ' if qtd > 0 else ''}{qtd} {unidade}"
         rows.append([
-            InlineKeyboardButton("➖", callback_data=f"loja_rem_{cod}"),
-            InlineKeyboardButton(f"{qtd} {unidade}", callback_data="noop"),
-            InlineKeyboardButton("➕", callback_data=f"loja_add_{cod}"),
+            InlineKeyboardButton(f"➖", callback_data=f"loja_rem_{cod}"),
+            InlineKeyboardButton(label_qtd,  callback_data="noop"),
+            InlineKeyboardButton(f"➕", callback_data=f"loja_add_{cod}"),
+            InlineKeyboardButton(f"{nome}", callback_data="noop"),
         ])
     rows.append([
-        InlineKeyboardButton("✅ Confirmar Pedido", callback_data="loja_confirmar"),
-        InlineKeyboardButton("❌ Cancelar",          callback_data="loja_cancelar"),
+        InlineKeyboardButton("⚡ fechar pedido", callback_data="loja_confirmar"),
+    ])
+    rows.append([
+        InlineKeyboardButton("✖ cancelar",       callback_data="loja_cancelar"),
     ])
     return InlineKeyboardMarkup(rows)
 
@@ -258,11 +281,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=main_keyboard()
         )
     else:
-        nome = update.effective_user.first_name or "cliente"
         await update.message.reply_text(
-            f"👋 Olá, <b>{nome}</b>! Bem-vindo à nossa loja 🍪\n"
+            "🖤  <b>STORE</b>\n"
             "━━━━━━━━━━━━━━━━━━\n"
-            "Escolha uma opção abaixo:",
+            "entrega a partir das 19:30",
             parse_mode="HTML",
             reply_markup=customer_keyboard()
         )
@@ -728,12 +750,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.clear()
         context.user_data["carrinho"] = {c: 0 for c in PRODUTOS_INFO}
         context.user_data["estado"]   = "cliente_carrinho"
+        carrinho = context.user_data["carrinho"]
         await query.edit_message_text(
-            "🛒 <b>Monte seu pedido:</b>\n\n"
-            "Use ➕ para adicionar e ➖ para remover.\n"
-            "Quando terminar, toque em <b>✅ Confirmar Pedido</b>.",
+            build_cart_text(carrinho),
             parse_mode="HTML",
-            reply_markup=build_cart_keyboard(context.user_data["carrinho"])
+            reply_markup=build_cart_keyboard(carrinho)
         )
 
     elif query.data == "loja_produtos":
@@ -742,18 +763,18 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         c.execute("SELECT codigo, nome, preco_venda, estoque FROM produtos ORDER BY codigo")
         rows = c.fetchall()
         conn.close()
-        msg = "📋 <b>PRODUTOS DISPONÍVEIS</b>\n━━━━━━━━━━━━━━\n\n"
+        msg = "📦  <b>CARDÁPIO</b>\n━━━━━━━━━━━━━━━━━━\n\n"
         for cod, nome, preco, estoque in rows:
             unidade = PRODUTOS_INFO[cod][2]
-            disp = "✅ Disponível" if estoque > 0 else "❌ Esgotado"
-            msg += f"{nome}\n💰 R$ {preco:.0f}/{unidade}  {disp}\n\n"
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🛒 Fazer Pedido", callback_data="loja_iniciar")]])
+            status  = "🟢" if estoque > 0 else "🔴 esgotado"
+            msg += f"{status}  {nome}\n    R$ {preco:.0f}/{unidade}\n\n"
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🛒  pedir agora", callback_data="loja_iniciar")]])
         await query.edit_message_text(msg, parse_mode="HTML", reply_markup=kb)
 
     elif query.data.startswith("loja_add_") or query.data.startswith("loja_rem_"):
-        parts  = query.data.split("_")
-        action = parts[1]   # "add" or "rem"
-        cod    = parts[2]   # "ICE", "PAK", etc.
+        parts    = query.data.split("_")
+        action   = parts[1]
+        cod      = parts[2]
         carrinho = context.user_data.get("carrinho", {c: 0 for c in PRODUTOS_INFO})
         if action == "add":
             conn = get_db()
@@ -762,14 +783,18 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             estoque = cur.fetchone()[0]
             conn.close()
             if carrinho.get(cod, 0) >= int(estoque):
-                await query.answer("⚠️ Estoque insuficiente!", show_alert=True)
+                await query.answer("sem estoque", show_alert=True)
                 return
             carrinho[cod] = carrinho.get(cod, 0) + 1
         else:
             carrinho[cod] = max(0, carrinho.get(cod, 0) - 1)
         context.user_data["carrinho"] = carrinho
         try:
-            await query.edit_message_reply_markup(reply_markup=build_cart_keyboard(carrinho))
+            await query.edit_message_text(
+                build_cart_text(carrinho),
+                parse_mode="HTML",
+                reply_markup=build_cart_keyboard(carrinho)
+            )
         except Exception:
             pass
 
@@ -777,42 +802,42 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         carrinho = context.user_data.get("carrinho", {})
         itens    = {k: v for k, v in carrinho.items() if v > 0}
         if not itens:
-            await query.answer("⚠️ Adicione pelo menos um produto!", show_alert=True)
+            await query.answer("adiciona pelo menos um item", show_alert=True)
             return
         subtotal = sum(itens[cod] * PRODUTOS_INFO[cod][1] for cod in itens)
         taxa     = 10.0 if subtotal < 500 else 0.0
         total    = subtotal + taxa
         user     = query.from_user
         context.user_data["pedido_pendente"] = {
-            "itens":          itens,
-            "subtotal":       subtotal,
-            "taxa":           taxa,
-            "total":          total,
-            "nome_cliente":   user.first_name or "Cliente",
+            "itens":            itens,
+            "subtotal":         subtotal,
+            "taxa":             taxa,
+            "total":            total,
+            "nome_cliente":     user.first_name or "Cliente",
             "customer_contact": f"@{user.username}" if user.username else f"ID:{user.id}",
         }
         context.user_data["estado"] = "cliente_comprovante"
         itens_str = "\n".join(
-            f"   • {q} {PRODUTOS_INFO[p][2]} × {PRODUTOS_INFO[p][0]}"
+            f"  {PRODUTOS_INFO[p][0]}  ×{q}   R$ {q * PRODUTOS_INFO[p][1]:.0f}"
             for p, q in itens.items()
         )
-        taxa_str = f"\n📌 Taxa entrega: R$ {taxa:.2f}" if taxa > 0 else ""
+        taxa_str = f"\n  entrega: R$ {taxa:.0f}" if taxa > 0 else ""
         msg = (
-            f"📋 <b>RESUMO DO PEDIDO</b>\n"
+            f"🖤  <b>PEDIDO FECHADO</b>\n"
             f"━━━━━━━━━━━━━━━━━━\n\n"
-            f"{itens_str}\n\n"
-            f"💰 Subtotal: R$ {subtotal:.2f}{taxa_str}\n"
-            f"💎 <b>Total: R$ {total:.2f}</b>\n\n"
+            f"{itens_str}\n"
             f"━━━━━━━━━━━━━━━━━━\n"
-            f"💳 <b>Pague via PIX:</b>\n"
+            f"{taxa_str}\n"
+            f"💸  <b>Total: R$ {total:.0f}</b>\n\n"
+            f"⚡  <b>PIX:</b>\n"
             f"<code>{CHAVE_PIX}</code>\n\n"
-            f"📸 Após o pagamento, <b>envie o comprovante aqui como foto</b>."
+            f"manda o comprovante aqui como foto após pagar 👇"
         )
         await query.edit_message_text(msg, parse_mode="HTML")
 
     elif query.data == "loja_cancelar":
         context.user_data.clear()
-        await query.edit_message_text("❌ Pedido cancelado.\n\nUse /start para voltar ao menu.")
+        await query.edit_message_text("pedido cancelado.\n\n/start pra voltar.")
 
     # ====================== CONFIRMAÇÃO ADMIN ======================
 
