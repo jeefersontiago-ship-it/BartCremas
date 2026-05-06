@@ -1,0 +1,13 @@
+uploads = []
+
+[[generated]]
+id = "sLBPs3bPnDo5Wdgj8WdfO"
+uri = "file://attached_assets/generated_images/bart_cremas.png"
+type = "image"
+title = "bart cremas absurd art"
+
+[[outputs]]
+id = "9zn_vTsVDL2NJXlbB2uz0"
+uri = "file://attached_assets/generated_images/bart_cremas.png"
+type = "image"
+title = "Bart Cremas — Arte Absurda"
