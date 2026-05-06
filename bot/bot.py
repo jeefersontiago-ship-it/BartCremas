@@ -295,23 +295,18 @@ def build_cart_text(carrinho: dict) -> str:
     linhas += f"💸  <b>Total: R$ {total:.0f}</b>"
     return linhas
 
-NOMES_CURTOS = {
-    "ICE":     "🍦 Ice Cream Cake",
-    "PAK":     "🥐 Pak Nutella",
-    "CRUMBLE": "🍪 Crumble",
-    "POD_I":   "🪦 Indica",
-    "POD_S":   "🌿 Sativa",
-}
-
 def build_cart_keyboard(carrinho: dict) -> InlineKeyboardMarkup:
     rows = []
     for cod, (nome, preco, unidade) in PRODUTOS_INFO.items():
         qtd    = carrinho.get(cod, 0)
-        label  = NOMES_CURTOS.get(cod, nome)
-        centro = f"🔥 ×{qtd}" if qtd > 0 else f"· {unidade} ·"
+        # linha 1: nome completo em largura total
+        nome_label = f"{'🔥 ' if qtd > 0 else ''}{nome}  — R$ {preco:.0f}/{unidade}"
+        rows.append([InlineKeyboardButton(nome_label, callback_data="noop")])
+        # linha 2: controles
+        qtd_label = f"🔥 {qtd}" if qtd > 0 else "0"
         rows.append([
             InlineKeyboardButton("➖", callback_data=f"loja_rem_{cod}"),
-            InlineKeyboardButton(f"{label}  {centro}", callback_data="noop"),
+            InlineKeyboardButton(qtd_label, callback_data="noop"),
             InlineKeyboardButton("➕", callback_data=f"loja_add_{cod}"),
         ])
     rows.append([InlineKeyboardButton("⚡ fechar pedido", callback_data="loja_confirmar")])
