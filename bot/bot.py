@@ -1702,7 +1702,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         taxa_str = f"\n  entrega: R$ {taxa:.0f}" if taxa > 0 else ""
         context.user_data["itens_str_cache"] = itens_str
         context.user_data["taxa_str_cache"]  = taxa_str
-        context.user_data["estado"] = "cliente_endereco"
+        context.user_data["estado"] = "cliente_nome"
         agendado_banner = ""
         if context.user_data.get("agendado"):
             dt_raw = context.user_data.get("data_entrega", "")
@@ -1719,11 +1719,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"━━━━━━━━━━━━━━━━━━\n"
             f"{taxa_str}\n"
             f"💸  <b>Total: R$ {total:.0f}</b>\n\n"
-            f"📍 <b>Qual o seu endereço de entrega?</b>\n"
-            f"<i>(rua, número, bairro)</i>"
+            f"👤 <b>Qual o seu nome completo?</b>\n"
+            f"<i>(será usado para identificar seu pedido)</i>"
         )
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🏪 Vou retirar", callback_data="loja_retirar")],
             [InlineKeyboardButton("← voltar ao carrinho", callback_data="loja_voltar_carrinho")],
         ])
         await query.edit_message_text(msg, parse_mode="HTML", reply_markup=kb)
@@ -2194,6 +2193,31 @@ async def processar_mensagem(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 "❌ Pedido cancelado.\n\n"
                 "Use /start para voltar ao menu.",
             )
+        return
+
+    # --- Nome completo do cliente ---
+    if estado == "cliente_nome":
+        pedido = context.user_data.get("pedido_pendente")
+        if not pedido:
+            await update.message.reply_text("Sessão expirada. Use /start para recomeçar.")
+            return
+        nome = texto.strip()
+        if len(nome) < 3:
+            await update.message.reply_text(
+                "✏️ Por favor, informe seu nome completo (mínimo 3 letras)."
+            )
+            return
+        pedido["nome_cliente"] = nome
+        context.user_data["estado"] = "cliente_endereco"
+        msg = (
+            f"✅ Nome salvo: <b>{nome}</b>\n\n"
+            f"📍 <b>Qual o seu endereço de entrega?</b>\n"
+            f"<i>(rua, número, bairro)</i>"
+        )
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🏪 Vou retirar", callback_data="loja_retirar")],
+        ])
+        await update.message.reply_text(msg, parse_mode="HTML", reply_markup=kb)
         return
 
     # --- Endereço de entrega (fluxo loja) ---
