@@ -129,6 +129,10 @@ def registrar_caixa(tipo, valor, descricao):
     data = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     c.execute("INSERT INTO caixa (tipo, valor, descricao, data) VALUES (?,?,?,?)",
               (tipo, valor, descricao, data))
+    if tipo == "entrada":
+        c.execute("UPDATE config SET valor = valor + ? WHERE chave = 'saldo_banco'", (valor,))
+    else:
+        c.execute("UPDATE config SET valor = valor - ? WHERE chave = 'saldo_banco'", (valor,))
     conn.commit()
     conn.close()
 
