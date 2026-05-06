@@ -155,6 +155,8 @@ def init_db():
         c.execute("ALTER TABLE pedidos ADD COLUMN endereco TEXT DEFAULT ''")
     if "customer_chat_id" not in cols:
         c.execute("ALTER TABLE pedidos ADD COLUMN customer_chat_id INTEGER DEFAULT 0")
+    if "data_entrega" not in cols:
+        c.execute("ALTER TABLE pedidos ADD COLUMN data_entrega TEXT DEFAULT ''")
 
     conn.commit()
     conn.close()
@@ -369,12 +371,12 @@ def socio_keyboard():
         [InlineKeyboardButton("🛍️  ver cardápio",   callback_data="loja_produtos")],
     ])
 
-def build_cart_text(carrinho: dict) -> str:
+def build_cart_text(carrinho: dict, prefixo: str = "") -> str:
     subtotal = sum(carrinho.get(cod, 0) * PRODUTOS_INFO[cod][1] for cod in PRODUTOS_INFO)
     taxa     = 10.0 if 0 < subtotal < 500 else 0.0
     total    = subtotal + taxa
 
-    linhas = "🛒  <b>CARRINHO</b>\n━━━━━━━━━━━━━━━━━━\n\n"
+    linhas = prefixo + "🛒  <b>CARRINHO</b>\n━━━━━━━━━━━━━━━━━━\n\n"
     tem_item = False
     for cod, (nome, preco, unidade) in PRODUTOS_INFO.items():
         qtd = carrinho.get(cod, 0)
@@ -1115,8 +1117,22 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass  # quantity display buttons — do nothing
 
     elif query.data == "loja_iniciar":
+        amanha     = datetime.date.today() + datetime.timedelta(days=1)
+        amanha_str = amanha.strftime("%d/%m")
+        kb_agendar = InlineKeyboardMarkup([
+            [InlineKeyboardButton(f"📅 Agendar para amanhã ({amanha_str})", callback_data="loja_agendar")],
+            [InlineKeyboardButton("← Voltar", callback_data="loja_menu")],
+        ])
         if not loja_esta_aberta():
-            await query.answer("🔴 Estamos fechados no momento!\nHorário: 08:00 às 19:00", show_alert=True)
+            await query.edit_message_text(
+                "🔴 <b>Estamos fechados agora.</b>\n"
+                "━━━━━━━━━━━━━━━━━━\n\n"
+                "🕐 Horário: <b>08:00 às 19:00</b>\n\n"
+                "Mas você pode deixar um pedido agendado\n"
+                "para entrega amanhã!",
+                parse_mode="HTML",
+                reply_markup=kb_agendar
+            )
             return
         # Limite de 10 pedidos por dia (dias de semana)
         hoje = datetime.date.today()
@@ -1128,11 +1144,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             qtd_hoje = c_lim.fetchone()[0]; conn_lim.close()
             if qtd_hoje >= 10:
-                await query.answer(
-                    "🚫 Limite de pedidos atingido!\n"
-                    "Aceitamos no máximo 10 pedidos por dia.\n"
-                    "Tente novamente amanhã.",
-                    show_alert=True
+                await query.edit_message_text(
+                    "🚫 <b>Limite de pedidos atingido!</b>\n"
+                    "━━━━━━━━━━━━━━━━━━\n\n"
+                    "Aceitamos no máximo <b>10 pedidos por dia</b>.\n\n"
+                    "Mas você pode deixar um pedido agendado\n"
+                    "para entrega amanhã!",
+                    parse_mode="HTML",
+                    reply_markup=kb_agendar
                 )
                 return
         context.user_data.clear()
@@ -1141,6 +1160,22 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         carrinho = context.user_data["carrinho"]
         await query.edit_message_text(
             build_cart_text(carrinho),
+            parse_mode="HTML",
+            reply_markup=build_cart_keyboard(carrinho)
+        )
+
+    elif query.data == "loja_agendar":
+        amanha     = datetime.date.today() + datetime.timedelta(days=1)
+        amanha_str = amanha.strftime("%d/%m")
+        context.user_data.clear()
+        context.user_data["carrinho"]     = {c: 0 for c in PRODUTOS_INFO}
+        context.user_data["estado"]       = "cliente_carrinho"
+        context.user_data["agendado"]     = True
+        context.user_data["data_entrega"] = amanha.strftime("%Y-%m-%d")
+        carrinho = context.user_data["carrinho"]
+        prefixo  = f"📅 <b>AGENDADO — entrega {amanha_str}</b>\n━━━━━━━━━━━━━━━━━━\n\n"
+        await query.edit_message_text(
+            build_cart_text(carrinho, prefixo),
             parse_mode="HTML",
             reply_markup=build_cart_keyboard(carrinho)
         )
@@ -1201,8 +1236,16 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             carrinho[cod] = max(0, carrinho.get(cod, 0) - 1)
         context.user_data["carrinho"] = carrinho
         try:
+            _ag = context.user_data.get("agendado")
+            _de = context.user_data.get("data_entrega", "")
+            _pref = ""
+            if _ag and _de:
+                try:
+                    _pref = f"📅 <b>AGENDADO — entrega {datetime.datetime.strptime(_de,'%Y-%m-%d').strftime('%d/%m')}</b>\n━━━━━━━━━━━━━━━━━━\n\n"
+                except Exception:
+                    pass
             await query.edit_message_text(
-                build_cart_text(carrinho),
+                build_cart_text(carrinho, _pref),
                 parse_mode="HTML",
                 reply_markup=build_cart_keyboard(carrinho)
             )
@@ -1228,6 +1271,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "customer_contact": f"@{user.username}" if user.username else f"ID:{user.id}",
             "customer_chat_id": user.id,
             "endereco":         "",
+            "agendado":         context.user_data.get("agendado", False),
+            "data_entrega":     context.user_data.get("data_entrega", ""),
         }
         itens_str = "\n".join(
             f"  {PRODUTOS_INFO[p][0]}  ×{q}   R$ {q * PRODUTOS_INFO[p][1]:.0f}"
@@ -1237,7 +1282,16 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["itens_str_cache"] = itens_str
         context.user_data["taxa_str_cache"]  = taxa_str
         context.user_data["estado"] = "cliente_endereco"
+        agendado_banner = ""
+        if context.user_data.get("agendado"):
+            dt_raw = context.user_data.get("data_entrega", "")
+            try:
+                dt_fmt = datetime.datetime.strptime(dt_raw, "%Y-%m-%d").strftime("%d/%m")
+            except Exception:
+                dt_fmt = "amanhã"
+            agendado_banner = f"📅 <b>AGENDADO — entrega {dt_fmt}</b>\n━━━━━━━━━━━━━━━━━━\n\n"
         msg = (
+            f"{agendado_banner}"
             f"🖤  <b>PEDIDO FECHADO</b>\n"
             f"━━━━━━━━━━━━━━━━━━\n\n"
             f"{itens_str}\n"
@@ -1323,20 +1377,29 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if qtd > 0:
                 c.execute("INSERT INTO itens_pedido (pedido_id, produto, quantidade) VALUES (?,?,?)", (pedido_id, prod, qtd))
                 c.execute("UPDATE produtos SET estoque = estoque - ? WHERE codigo = ?", (qtd, prod))
+        agendado     = pedido.get("agendado", False)
+        data_entrega = pedido.get("data_entrega", "")
+        try:
+            dt_fmt = datetime.datetime.strptime(data_entrega, "%Y-%m-%d").strftime("%d/%m") if data_entrega else ""
+        except Exception:
+            dt_fmt = ""
         c.execute("INSERT INTO caixa (tipo, valor, descricao, data) VALUES ('entrada',?,?,?)",
                   (pedido["total"], f"Pedido #{numero} DINHEIRO", data_now))
-        c.execute("UPDATE pedidos SET endereco=?, customer_chat_id=? WHERE id=?", (endereco, cid, pedido_id))
+        c.execute("UPDATE pedidos SET endereco=?, customer_chat_id=?, data_entrega=? WHERE id=?",
+                  (endereco, cid, data_entrega, pedido_id))
         conn.commit(); conn.close()
         await check_low_stock(context.bot)
         context.user_data.clear()
-        end_str  = f"\n📍 <b>Endereço:</b> {endereco}" if endereco and endereco != "Retirada" else ("\n🏪 <b>Retirada</b>" if endereco == "Retirada" else "")
+        end_str   = f"\n📍 <b>Endereço:</b> {endereco}" if endereco and endereco != "Retirada" else ("\n🏪 <b>Retirada</b>" if endereco == "Retirada" else "")
         troco_str = f"\n💸 Troco: R$ {troco:.0f}" if troco > 0 else ""
+        ag_str    = f"\n📅 <b>Entrega agendada:</b> {dt_fmt}" if agendado and dt_fmt else ""
+        titulo_din = "📅 PEDIDO AGENDADO — DINHEIRO" if agendado else "💵 NOVO PEDIDO — DINHEIRO"
         await context.bot.send_message(
             chat_id=ADMIN_ID,
             text=(
-                f"💵 <b>NOVO PEDIDO — DINHEIRO</b>\n"
+                f"{titulo_din}\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
-                f"👤 Cliente: {pedido['nome_cliente']} ({contato}){end_str}\n\n"
+                f"👤 Cliente: {pedido['nome_cliente']} ({contato}){end_str}{ag_str}\n\n"
                 f"{itens_str}\n"
                 f"💰 Total: R$ {pedido['total']:.2f}{troco_str}  [paga na entrega]\n"
                 f"━━━━━━━━━━━━━━━━━━"
@@ -1347,10 +1410,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(
                 chat_id=ENTREGADOR_USERNAME,
                 text=(
-                    f"📥 <b>PEDIDO — DINHEIRO</b>\n"
+                    f"{'📅 ENTREGA AGENDADA!' if agendado else '📥 PEDIDO — DINHEIRO'}\n"
                     f"━━━━━━━━━━━━━━\n"
                     f"👤 Cliente: {pedido['nome_cliente']}\n"
-                    f"📱 Contato: {contato}{end_str}\n\n"
+                    f"📱 Contato: {contato}{end_str}{ag_str}\n\n"
                     f"{itens_str}\n\n"
                     f"💰 Total: R$ {pedido['total']:.2f}{troco_str}  [paga na entrega 💵]"
                 ),
@@ -1361,12 +1424,19 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         except Exception as e:
             logging.warning(f"Não foi possível notificar entregador (dinheiro): {e}")
-        await query.edit_message_text(
-            f"✅ <b>Pedido confirmado!</b>\n\n"
-            f"💵 Pagamento em dinheiro na entrega.\n"
-            f"Em breve o entregador entrará em contato. 🛵",
-            parse_mode="HTML"
-        )
+        if agendado and dt_fmt:
+            msg_confirm = (
+                f"📅 <b>Pedido agendado para {dt_fmt}!</b>\n\n"
+                f"💵 Pagamento em dinheiro na entrega.\n"
+                f"O entregador entrará em contato no dia da entrega. 🛵"
+            )
+        else:
+            msg_confirm = (
+                "✅ <b>Pedido confirmado!</b>\n\n"
+                "💵 Pagamento em dinheiro na entrega.\n"
+                "Em breve o entregador entrará em contato. 🛵"
+            )
+        await query.edit_message_text(msg_confirm, parse_mode="HTML")
 
     elif query.data == "loja_retirar":
         pedido = context.user_data.get("pedido_pendente")
@@ -1548,10 +1618,16 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         c        = conn.cursor()
         data_now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
         numero   = datetime.datetime.now().strftime("%d%H%M")
+        agendado     = pedido.get("agendado", False)
+        data_entrega = pedido.get("data_entrega", "")
+        try:
+            dt_fmt = datetime.datetime.strptime(data_entrega, "%Y-%m-%d").strftime("%d/%m") if data_entrega else ""
+        except Exception:
+            dt_fmt = ""
         c.execute(
-            "INSERT INTO pedidos (numero, cliente, total, taxa, pagamento, responsavel, data, status, endereco, customer_chat_id) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO pedidos (numero, cliente, total, taxa, pagamento, responsavel, data, status, endereco, customer_chat_id, data_entrega) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (numero, pedido["nome_cliente"], pedido["total"], pedido["taxa"], "PIX", "Loja-Bot", data_now, "OK",
-             pedido.get("endereco", ""), pedido.get("customer_chat_id", customer_id))
+             pedido.get("endereco", ""), pedido.get("customer_chat_id", customer_id), data_entrega)
         )
         pedido_id = c.lastrowid
         for prod, qtd in pedido["itens"].items():
@@ -1562,7 +1638,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.close()
         registrar_caixa("entrada", pedido["total"], f"Pedido #{numero} - {pedido['nome_cliente']}")
         await check_low_stock(context.bot)
-        # Notificar entregador
+        # Montar strings comuns
         itens_entrega = "\n".join(
             f"• {q} {PRODUTOS_INFO[p][2]} {PRODUTOS_INFO[p][0]}"
             for p, q in pedido["itens"].items() if q > 0
@@ -1570,15 +1646,17 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         endereco = pedido.get("endereco", "")
         end_str  = f"\n📍 <b>Endereço:</b> {endereco}" if endereco and endereco != "Retirada" else ("\n🏪 <b>Retirada</b>" if endereco == "Retirada" else "")
         cid      = pedido.get("customer_chat_id", customer_id)
+        ag_str   = f"\n📅 <b>Entrega agendada:</b> {dt_fmt}" if agendado and dt_fmt else ""
+        titulo_entregador = "📅 ENTREGA AGENDADA!" if agendado else "🚚 NOVA ENTREGA!"
         try:
             await context.bot.send_message(
                 chat_id=ENTREGADOR_USERNAME,
                 text=(
-                    f"🚚 <b>NOVA ENTREGA!</b>\n"
+                    f"{titulo_entregador}\n"
                     f"━━━━━━━━━━━━━━\n"
                     f"👤 <b>Cliente:</b> {pedido['nome_cliente']}\n"
                     f"📱 <b>Contato:</b> {pedido['customer_contact']}"
-                    f"{end_str}\n\n"
+                    f"{end_str}{ag_str}\n\n"
                     f"{itens_entrega}\n\n"
                     f"💰 Total: R$ {pedido['total']:.2f} (PIX ✅ confirmado)"
                 ),
@@ -1590,17 +1668,21 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logging.warning(f"Não foi possível notificar entregador: {e}")
         # Notificar cliente
-        await context.bot.send_message(
-            chat_id=customer_id,
-            text=(
+        if agendado and dt_fmt:
+            msg_cliente = (
+                f"📅 <b>Pedido agendado para {dt_fmt}!</b>\n\n"
+                f"✅ PIX confirmado. Seu pedido está reservado!\n\n"
+                f"📱 <b>Entregador:</b> {ENTREGADOR_USERNAME}\n"
+                f"Ele entrará em contato no dia da entrega."
+            )
+        else:
+            msg_cliente = (
                 "✅ <b>Pagamento confirmado!</b>\n\n"
                 "🚚 Seu pedido foi aceito!\n\n"
                 f"📱 <b>Contato do entregador:</b> {ENTREGADOR_USERNAME}\n"
-                "Entre em contato com ele para combinar a entrega.\n\n"
-                "⏰ Entregas a partir das 19:30"
-            ),
-            parse_mode="HTML"
-        )
+                "Entre em contato com ele para combinar a entrega."
+            )
+        await context.bot.send_message(chat_id=customer_id, text=msg_cliente, parse_mode="HTML")
         await query.edit_message_caption(
             f"✅ <b>Pedido #{numero} confirmado!</b>\n"
             f"👤 {pedido['nome_cliente']} — R$ {pedido['total']:.2f}\n"
@@ -1975,6 +2057,23 @@ async def job_abrir_loja(context: ContextTypes.DEFAULT_TYPE):
     await check_low_stock(context.bot)
     if ADMIN_ID:
         estoque = build_estoque_text()
+        # Pedidos agendados para hoje
+        hoje_str = datetime.date.today().strftime("%Y-%m-%d")
+        conn = get_db(); c = conn.cursor()
+        c.execute(
+            "SELECT numero, cliente, total, pagamento, endereco FROM pedidos "
+            "WHERE data_entrega=? AND responsavel='Loja-Bot' AND status='OK'",
+            (hoje_str,)
+        )
+        agendados = c.fetchall(); conn.close()
+        ag_bloco = ""
+        if agendados:
+            linhas = "\n".join(
+                f"  #{n} {cl} — R${tot:.0f} ({pag})"
+                + (f"\n    📍 {end}" if end else "")
+                for n, cl, tot, pag, end in agendados
+            )
+            ag_bloco = f"\n\n📅 <b>Pedidos agendados para hoje ({len(agendados)}):</b>\n{linhas}"
         try:
             await context.bot.send_message(
                 chat_id=ADMIN_ID,
@@ -1982,7 +2081,7 @@ async def job_abrir_loja(context: ContextTypes.DEFAULT_TYPE):
                     "🟢 <b>LOJA ABERTA</b>\n"
                     "━━━━━━━━━━━━━━\n\n"
                     "Abertura automática às 08:00.\n\n"
-                    + estoque
+                    + estoque + ag_bloco
                 ),
                 parse_mode="HTML"
             )
