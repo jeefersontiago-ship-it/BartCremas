@@ -4,6 +4,7 @@ import datetime
 import re
 import os
 import json
+from zoneinfo import ZoneInfo
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
@@ -1949,6 +1950,61 @@ async def processar_mensagem(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"❌ Erro ao processar. Verifique o formato.\n\n<code>{e}</code>",
             parse_mode="HTML")
 
+# ====================== JOBS AGENDADOS ======================
+
+async def job_abrir_loja(context: ContextTypes.DEFAULT_TYPE):
+    """Abre a loja automaticamente no horário definido."""
+    set_config("loja_aberta", 1)
+    await check_low_stock(context.bot)
+    if ADMIN_ID:
+        estoque = build_estoque_text()
+        try:
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=(
+                    "🟢 <b>LOJA ABERTA</b>\n"
+                    "━━━━━━━━━━━━━━\n\n"
+                    "Abertura automática às 19:00.\n\n"
+                    + estoque
+                ),
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            logging.warning(f"Falha ao notificar abertura: {e}")
+
+async def job_fechar_loja(context: ContextTypes.DEFAULT_TYPE):
+    """Fecha a loja e envia relatório diário automaticamente."""
+    set_config("loja_aberta", 0)
+    if ADMIN_ID:
+        hoje = datetime.date.today().strftime("%Y-%m-%d")
+        rel  = build_relatorio_text(hoje)
+        try:
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=(
+                    "🔴 <b>LOJA FECHADA</b>\n"
+                    "━━━━━━━━━━━━━━\n\n"
+                    "Fechamento automático às 23:30.\n\n"
+                    + rel
+                ),
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            logging.warning(f"Falha ao notificar fechamento: {e}")
+
+async def job_verificar_estoque(context: ContextTypes.DEFAULT_TYPE):
+    """Verificação de estoque toda manhã às 10h."""
+    if ADMIN_ID:
+        try:
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text="📦 <b>Checagem de estoque — manhã</b>",
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
+    await check_low_stock(context.bot)
+
 # ====================== MAIN ======================
 
 FOTOS_LOCAL_DIR = os.path.join(os.path.dirname(__file__), "fotos_local")
@@ -2003,6 +2059,16 @@ def main():
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.PHOTO, handle_comprovante))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, processar_mensagem))
+
+    # ── Agendamentos automáticos (fuso horário Brasília) ──
+    BR_TZ = ZoneInfo("America/Sao_Paulo")
+    jq    = app.job_queue
+    # Abre loja às 19:00 e checa estoque
+    jq.run_daily(job_abrir_loja,       datetime.time(19,  0, 0, tzinfo=BR_TZ))
+    # Fecha loja às 23:30 e envia relatório do dia
+    jq.run_daily(job_fechar_loja,      datetime.time(23, 30, 0, tzinfo=BR_TZ))
+    # Checagem de estoque toda manhã às 10:00
+    jq.run_daily(job_verificar_estoque, datetime.time(10,  0, 0, tzinfo=BR_TZ))
 
     logging.info("Bot iniciado...")
     app.run_polling()
