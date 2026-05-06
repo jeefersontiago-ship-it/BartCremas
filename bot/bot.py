@@ -321,6 +321,44 @@ async def cmd_fornecedor(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except (ValueError, IndexError):
         await update.message.reply_text("Uso: /fornecedor 74890")
 
+# ====================== CANCELAR ÚLTIMO PEDIDO ======================
+
+async def cmd_cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Apenas o administrador pode cancelar pedidos.")
+        return
+
+    conn = get_db()
+    c = conn.cursor()
+    c.execute(
+        "SELECT id, numero, cliente, total, pagamento, data FROM pedidos "
+        "WHERE status='OK' ORDER BY id DESC LIMIT 1"
+    )
+    row = c.fetchone()
+    conn.close()
+
+    if not row:
+        await update.message.reply_text("ℹ️ Nenhum pedido para cancelar.")
+        return
+
+    pedido_id, numero, cliente, total, pagamento, data = row
+    pag_emoji = "📲" if pagamento == "PIX" else "💵"
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Sim, cancelar", callback_data=f"cancelar_sim_{pedido_id}")],
+        [InlineKeyboardButton("❌ Não, manter",   callback_data="cancelar_nao")],
+    ])
+    await update.message.reply_text(
+        "⚠️ <b>Cancelar último pedido?</b>\n\n"
+        f"🔢 Pedido: <b>#{numero}</b>\n"
+        f"👤 Cliente: {cliente}\n"
+        f"💰 Total: R$ {total:.2f} {pag_emoji}\n"
+        f"🕐 Data: {data}\n\n"
+        "O estoque será restaurado automaticamente.",
+        parse_mode="HTML",
+        reply_markup=keyboard
+    )
+
 # ====================== FLUXO GUIADO ======================
 
 async def calcular_pedido(update: Update, context: ContextTypes.DEFAULT_TYPE, texto: str):
@@ -437,6 +475,39 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         hoje = datetime.datetime.now().strftime("%Y-%m-%d")
         await query.edit_message_text(build_relatorio_text(hoje), parse_mode="HTML")
+
+    elif query.data.startswith("cancelar_sim_"):
+        if not is_admin(query.from_user.id):
+            await query.edit_message_text("❌ Acesso negado.")
+            return
+        pedido_id = int(query.data.split("_")[-1])
+        conn = get_db()
+        c = conn.cursor()
+        # Restore stock for each item
+        c.execute("SELECT produto, quantidade FROM itens_pedido WHERE pedido_id=?", (pedido_id,))
+        itens = c.fetchall()
+        for prod, qtd in itens:
+            c.execute("UPDATE produtos SET estoque = estoque + ? WHERE codigo = ?", (qtd, prod))
+        # Get order info for caixa reversal
+        c.execute("SELECT numero, cliente, total FROM pedidos WHERE id=?", (pedido_id,))
+        row = c.fetchone()
+        # Mark as cancelled instead of deleting (keeps history)
+        c.execute("UPDATE pedidos SET status='CANCELADO' WHERE id=?", (pedido_id,))
+        conn.commit()
+        conn.close()
+        # Reverse the caixa entry
+        if row:
+            numero, cliente, total = row
+            registrar_caixa("saida", total, f"Cancelamento pedido #{numero} - {cliente}")
+        itens_str = "\n".join(f"   • {p}: +{q:.1f} (restaurado)" for p, q in itens)
+        await query.edit_message_text(
+            f"✅ <b>Pedido #{row[0] if row else pedido_id} cancelado!</b>\n\n"
+            f"📦 <b>Estoque restaurado:</b>\n{itens_str}",
+            parse_mode="HTML"
+        )
+
+    elif query.data == "cancelar_nao":
+        await query.edit_message_text("👍 Pedido mantido. Nenhuma alteração feita.")
 
 # ====================== MESSAGE HANDLER ======================
 
@@ -591,6 +662,7 @@ def main():
     app.add_handler(CommandHandler("fornecedor", cmd_fornecedor))
     app.add_handler(CommandHandler("relatorio",  cmd_relatorio))
     app.add_handler(CommandHandler("fechamento", cmd_relatorio))
+    app.add_handler(CommandHandler("cancelar",   cmd_cancelar))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, processar_mensagem))
 
