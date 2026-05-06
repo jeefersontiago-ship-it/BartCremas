@@ -270,15 +270,16 @@ def build_pedidos_dia_text(hoje: str) -> str:
     hoje_fmt = datetime.datetime.strptime(hoje, "%Y-%m-%d").strftime("%d/%m/%Y")
     conn = get_db(); c = conn.cursor()
     c.execute("""
-        SELECT id, numero, cliente, total, pagamento, data, endereco, data_entrega
+        SELECT id, numero, cliente, total, pagamento, data, endereco, data_entrega, status
         FROM pedidos
         WHERE data LIKE ? AND status != 'CANCELADO'
         ORDER BY id ASC
     """, (f"{hoje}%",))
     pedidos = c.fetchall()
     total_geral = 0
+    n_entregue = 0
     linhas = []
-    for ped_id, numero, cliente, total, pagamento, data_ped, endereco, data_entrega in pedidos:
+    for ped_id, numero, cliente, total, pagamento, data_ped, endereco, data_entrega, status in pedidos:
         hora = data_ped[11:16] if len(data_ped) > 10 else "?"
         total_geral += total or 0
         c.execute("SELECT produto, quantidade FROM itens_pedido WHERE pedido_id=?", (ped_id,))
@@ -288,10 +289,14 @@ def build_pedidos_dia_text(hoje: str) -> str:
             for p, q in itens_rows
         )
         end_str = f"\n    📍 {endereco}" if endereco and endereco not in ("", "Retirada") else ("  🏪 Retirada" if endereco == "Retirada" else "")
-        ag_str  = f"  📅 ent. {datetime.datetime.strptime(data_entrega,'%Y-%m-%d').strftime('%d/%m')}" if data_entrega and data_entrega != hoje else ""
+        ag_str  = f"  📅{datetime.datetime.strptime(data_entrega,'%Y-%m-%d').strftime('%d/%m')}" if data_entrega and data_entrega != hoje else ""
         pag_emoji = "📲" if pagamento == "PIX" else "💵"
+        if status == "ENTREGUE":
+            st_emoji = "✅"; n_entregue += 1
+        else:
+            st_emoji = "🚚"
         linhas.append(
-            f"🕐 <b>{hora}</b>  #{numero}  {pag_emoji} R$ {total:.0f}{ag_str}\n"
+            f"{st_emoji} <b>{hora}</b>  #{numero}  {pag_emoji} R$ {total:.0f}{ag_str}\n"
             f"    👤 {cliente}  |  {itens_str}{end_str}"
         )
     saldo_banco = get_config("saldo_banco")
@@ -300,12 +305,46 @@ def build_pedidos_dia_text(hoje: str) -> str:
         corpo = "\n<i>Nenhum pedido hoje.</i>\n"
     else:
         corpo = "\n" + "\n\n".join(linhas) + "\n"
+    n_total = len(pedidos)
+    n_pend  = n_total - n_entregue
     msg  = f"📋 <b>PEDIDOS DO DIA</b> — {hoje_fmt}\n"
     msg += f"━━━━━━━━━━━━━━━━━━\n"
     msg += corpo
     msg += f"━━━━━━━━━━━━━━━━━━\n"
-    msg += f"🧾 <b>{len(pedidos)} pedido(s)</b>  |  💰 <b>R$ {total_geral:.0f}</b>\n"
-    msg += f"🏦 <b>Saldo Banco: R$ {saldo_banco:.2f}</b>"
+    msg += f"🧾 <b>{n_total} pedido(s)</b>  ✅ {n_entregue} entregue(s)  🚚 {n_pend} pendente(s)\n"
+    msg += f"💰 <b>R$ {total_geral:.0f}</b>  |  🏦 <b>Banco: R$ {saldo_banco:.2f}</b>"
+    return msg
+
+def build_admin_header() -> str:
+    """Cabeçalho rico do painel admin com dados ao vivo."""
+    hoje = datetime.date.today().strftime("%Y-%m-%d")
+    amanha = (datetime.date.today() + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+    conn = get_db(); c = conn.cursor()
+    c.execute("SELECT COUNT(*), COALESCE(SUM(total),0) FROM pedidos WHERE data LIKE ? AND status NOT IN ('CANCELADO')", (f"{hoje}%",))
+    qtd_hoje, total_hoje = c.fetchone()
+    c.execute("SELECT COUNT(*) FROM pedidos WHERE data LIKE ? AND status='OK' AND responsavel='Loja-Bot'", (f"{hoje}%",))
+    pend_entrega = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM pedidos WHERE data LIKE ? AND status='ENTREGUE'", (f"{hoje}%",))
+    entregues = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM pedidos WHERE data_entrega=? AND status='OK'", (amanha,))
+    ag_amanha = c.fetchone()[0]
+    conn.close()
+    saldo = get_config("saldo_banco")
+    n_pix = len(pedidos_pendentes)
+    loja_status = "🟢 Aberta" if loja_esta_aberta() else "🔴 Fechada"
+    hora_atual  = datetime.datetime.now().strftime("%H:%M")
+    msg  = f"🍪 <b>COOKIE CONTROL PRO</b>\n"
+    msg += f"━━━━━━━━━━━━━━━━━━\n"
+    msg += f"🏪 {loja_status}  |  🕐 {hora_atual}\n"
+    msg += f"━━━━━━━━━━━━━━━━━━\n"
+    msg += f"📋 Hoje: <b>{qtd_hoje} pedido(s)</b>  💰 <b>R$ {total_hoje:.0f}</b>\n"
+    msg += f"✅ Entregues: <b>{entregues}</b>  |  🚚 Pendentes: <b>{pend_entrega}</b>\n"
+    if n_pix > 0:
+        msg += f"⏳ PIX aguardando confirmação: <b>{n_pix}</b>\n"
+    if ag_amanha > 0:
+        msg += f"📅 Agendados p/ amanhã: <b>{ag_amanha}</b>\n"
+    msg += f"━━━━━━━━━━━━━━━━━━\n"
+    msg += f"🏦 Saldo Banco: <b>R$ {saldo:.2f}</b>"
     return msg
 
 def build_relatorio_text(hoje):
@@ -362,13 +401,17 @@ def build_relatorio_text(hoje):
 
 def main_keyboard():
     loja_btn = "🔴 Fechar Loja" if loja_esta_aberta() else "🟢 Abrir Loja"
+    n_pix  = len(pedidos_pendentes)
+    pix_label = f"⏳ PIX Pendentes ({n_pix}) ❗" if n_pix > 0 else "⏳ PIX Pendentes"
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📋 Novo Pedido",         callback_data="novo_pedido"),
-         InlineKeyboardButton("📦 Estoque",              callback_data="estoque")],
-        [InlineKeyboardButton("🗒️ Pedidos do Dia",      callback_data="pedidos_dia"),
-         InlineKeyboardButton("💰 Caixa do Dia",        callback_data="caixa")],
-        [InlineKeyboardButton("📊 Relatório Hoje",      callback_data="relatorio"),
-         InlineKeyboardButton("💸 Financeiro",          callback_data="admin_menu_financeiro")],
+        [InlineKeyboardButton(pix_label,               callback_data="admin_pendentes"),
+         InlineKeyboardButton("🚚 Entregas Pendentes", callback_data="admin_entregas_pendentes")],
+        [InlineKeyboardButton("🗒️ Pedidos do Dia",     callback_data="pedidos_dia"),
+         InlineKeyboardButton("📅 Agendados Amanhã",   callback_data="admin_agendados")],
+        [InlineKeyboardButton("💰 Caixa do Dia",       callback_data="caixa"),
+         InlineKeyboardButton("📊 Relatório Hoje",     callback_data="relatorio")],
+        [InlineKeyboardButton("📦 Estoque",            callback_data="estoque"),
+         InlineKeyboardButton("💸 Financeiro",         callback_data="admin_menu_financeiro")],
         [InlineKeyboardButton("🏪 Gestão de Estoque",  callback_data="admin_menu_estoque")],
         [InlineKeyboardButton("📢 Broadcast",          callback_data="admin_broadcast"),
          InlineKeyboardButton(loja_btn,                callback_data="admin_toggle_loja")],
@@ -407,11 +450,12 @@ def customer_keyboard():
 
 def socio_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📦 Estoque",         callback_data="estoque"),
-         InlineKeyboardButton("💰 Caixa do Dia",    callback_data="caixa")],
-        [InlineKeyboardButton("📊 Relatório Hoje",  callback_data="relatorio")],
-        [InlineKeyboardButton("📋 Pedidos do Dia",  callback_data="socio_pedidos")],
-        [InlineKeyboardButton("🛍️  ver cardápio",   callback_data="loja_produtos")],
+        [InlineKeyboardButton("🚚 Minhas Entregas Pendentes", callback_data="socio_entregas_pendentes")],
+        [InlineKeyboardButton("📋 Todos os Pedidos do Dia",   callback_data="socio_pedidos")],
+        [InlineKeyboardButton("📦 Estoque",                   callback_data="estoque"),
+         InlineKeyboardButton("💰 Caixa do Dia",             callback_data="caixa")],
+        [InlineKeyboardButton("📊 Relatório Hoje",            callback_data="relatorio")],
+        [InlineKeyboardButton("🛍️  Cardápio",                 callback_data="loja_produtos")],
     ])
 
 def build_cart_text(carrinho: dict, prefixo: str = "") -> str:
@@ -459,18 +503,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if is_admin(user.id):
         await update.message.reply_text(
-            "🍪 <b>Cookie Control Pro</b>\n"
-            "━━━━━━━━━━━━━━━━━━\n"
-            "Sistema profissional de controle\n"
-            "Escolha uma opção abaixo 👇",
+            build_admin_header(),
             parse_mode="HTML",
             reply_markup=main_keyboard()
         )
     elif is_entregador(user):
+        hoje = datetime.date.today().strftime("%Y-%m-%d")
+        conn = get_db(); c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM pedidos WHERE data LIKE ? AND status='OK' AND responsavel='Loja-Bot'", (f"{hoje}%",))
+        pend = c.fetchone()[0]
+        c.execute("SELECT COUNT(*), COALESCE(SUM(total),0) FROM pedidos WHERE data LIKE ? AND status IN ('OK','ENTREGUE')", (f"{hoje}%",))
+        qtd, total = c.fetchone()
+        conn.close()
+        hora = datetime.datetime.now().strftime("%H:%M")
         await update.message.reply_text(
-            "🛵  <b>PAINEL DO SÓCIO</b>\n"
-            "━━━━━━━━━━━━━━━━━━\n"
-            "Consultas disponíveis:",
+            f"🛵  <b>PAINEL DO SÓCIO</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"🕐 {hora}  |  📋 {qtd} pedido(s)  |  💰 R$ {total:.0f}\n"
+            f"🚚 Pendentes de entrega: <b>{pend}</b>",
             parse_mode="HTML",
             reply_markup=socio_keyboard()
         )
@@ -961,8 +1011,21 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "socio_menu_principal":
         if not is_entregador(query.from_user):
             await query.answer("❌ Acesso negado.", show_alert=True); return
+        hoje = datetime.date.today().strftime("%Y-%m-%d")
+        conn = get_db(); c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM pedidos WHERE data LIKE ? AND status='OK' AND responsavel='Loja-Bot'", (f"{hoje}%",))
+        pend = c.fetchone()[0]
+        c.execute("SELECT COUNT(*), COALESCE(SUM(total),0) FROM pedidos WHERE data LIKE ? AND status IN ('OK','ENTREGUE')", (f"{hoje}%",))
+        qtd, total = c.fetchone()
+        c.execute("SELECT COUNT(*) FROM pedidos WHERE data LIKE ? AND status='ENTREGUE'", (f"{hoje}%",))
+        entregues = c.fetchone()[0]
+        conn.close()
+        hora = datetime.datetime.now().strftime("%H:%M")
         await query.edit_message_text(
-            "🛵  <b>PAINEL DO SÓCIO</b>\n━━━━━━━━━━━━━━━━━━\nConsultas disponíveis:",
+            f"🛵  <b>PAINEL DO SÓCIO</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"🕐 {hora}  |  📋 {qtd} pedido(s)  |  💰 R$ {total:.0f}\n"
+            f"✅ Entregues: <b>{entregues}</b>  |  🚚 Pendentes: <b>{pend}</b>",
             parse_mode="HTML", reply_markup=socio_keyboard())
 
     elif query.data == "socio_pedidos":
@@ -970,37 +1033,117 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("❌ Acesso negado.", show_alert=True); return
         hoje = datetime.date.today().strftime("%Y-%m-%d")
         conn = get_db(); c = conn.cursor()
-        c.execute("""SELECT numero, cliente, total, pagamento, data
-                     FROM pedidos WHERE status='OK' AND data LIKE ?
-                     ORDER BY id DESC""", (f"{hoje}%",))
-        pedidos = c.fetchall(); conn.close()
+        c.execute("""SELECT id, numero, cliente, total, pagamento, data, endereco, status
+                     FROM pedidos WHERE status IN ('OK','ENTREGUE') AND data LIKE ?
+                     ORDER BY id ASC""", (f"{hoje}%",))
+        pedidos = c.fetchall()
         if not pedidos:
             msg = "📋 <b>PEDIDOS DO DIA</b>\n━━━━━━━━━━━━━━\n\nNenhum pedido hoje ainda."
         else:
             msg = f"📋 <b>PEDIDOS DO DIA</b> ({len(pedidos)})\n━━━━━━━━━━━━━━\n\n"
-            for num, cli, tot, pag, data in pedidos:
+            for ped_id, num, cli, tot, pag, data, endereco, status in pedidos:
                 hora = data[11:16] if len(data) > 10 else ""
-                msg += f"🔢 #{num}  🕐 {hora}\n👤 {cli}  💰 R$ {tot:.2f}  [{pag}]\n\n"
+                c.execute("SELECT produto, quantidade FROM itens_pedido WHERE pedido_id=?", (ped_id,))
+                itens_rows = c.fetchall()
+                itens_str = "  ".join(
+                    f"{PRODUTOS_INFO[p][0]}×{int(q)}" if p in PRODUTOS_INFO else f"{p}×{int(q)}"
+                    for p, q in itens_rows
+                )
+                st_emoji = "✅" if status == "ENTREGUE" else "🚚"
+                pag_emoji = "📲" if pag == "PIX" else "💵"
+                end_str = f"\n  📍 {endereco}" if endereco and endereco not in ("","Retirada") else ("  🏪 Retirada" if endereco == "Retirada" else "")
+                msg += f"{st_emoji} <b>#{num}</b>  🕐 {hora}  {pag_emoji} R$ {tot:.0f}\n  👤 {cli}{end_str}\n  {itens_str}\n\n"
+        conn.close()
         kb_vol = InlineKeyboardMarkup([[InlineKeyboardButton("← Menu", callback_data="socio_menu_principal")]])
         await query.edit_message_text(msg, parse_mode="HTML", reply_markup=kb_vol)
 
     elif query.data == "admin_menu_principal":
         if not is_admin(query.from_user.id):
             await query.answer("❌ Acesso negado.", show_alert=True); return
+        await query.edit_message_text(
+            build_admin_header(), parse_mode="HTML", reply_markup=main_keyboard())
+
+    elif query.data == "admin_pendentes":
+        if not is_admin(query.from_user.id):
+            await query.answer("❌ Acesso negado.", show_alert=True); return
+        kb_vol = InlineKeyboardMarkup([[InlineKeyboardButton("← Menu", callback_data="admin_menu_principal")]])
+        if not pedidos_pendentes:
+            await query.edit_message_text(
+                "⏳ <b>PIX PENDENTES</b>\n━━━━━━━━━━━━━━\n\n✅ Nenhum comprovante aguardando confirmação.",
+                parse_mode="HTML", reply_markup=kb_vol)
+            return
+        msg = f"⏳ <b>PIX PENDENTES ({len(pedidos_pendentes)})</b>\n━━━━━━━━━━━━━━\n\n"
+        for cid, ped in pedidos_pendentes.items():
+            itens_str = "  ".join(
+                f"{PRODUTOS_INFO[p][0]}×{int(q)}" if p in PRODUTOS_INFO else f"{p}×{int(q)}"
+                for p, q in ped["itens"].items() if q > 0
+            )
+            contato = ped.get("customer_contact", f"ID:{cid}")
+            end_str = f"\n  📍 {ped['endereco']}" if ped.get("endereco") and ped["endereco"] not in ("","Retirada") else ("  🏪 Retirada" if ped.get("endereco") == "Retirada" else "")
+            msg += (
+                f"👤 <b>{ped['nome_cliente']}</b> ({contato}){end_str}\n"
+                f"  {itens_str}\n"
+                f"  💰 R$ {ped['total']:.0f}\n\n"
+            )
+        await query.edit_message_text(msg, parse_mode="HTML", reply_markup=kb_vol)
+
+    elif query.data == "admin_entregas_pendentes":
+        if not is_admin(query.from_user.id):
+            await query.answer("❌ Acesso negado.", show_alert=True); return
         hoje = datetime.date.today().strftime("%Y-%m-%d")
         conn = get_db(); c = conn.cursor()
-        c.execute("SELECT COUNT(*), COALESCE(SUM(total),0) FROM pedidos WHERE data LIKE ? AND status!='CANCELADO'", (f"{hoje}%",))
-        qtd_hoje, total_hoje = c.fetchone()
+        c.execute("""SELECT id, numero, cliente, total, pagamento, data, endereco
+                     FROM pedidos WHERE data LIKE ? AND status='OK' AND responsavel='Loja-Bot'
+                     ORDER BY id ASC""", (f"{hoje}%",))
+        pendentes = c.fetchall()
+        linhas = []
+        for ped_id, numero, cliente, total, pag, data_ped, endereco in pendentes:
+            hora = data_ped[11:16] if len(data_ped) > 10 else "?"
+            c.execute("SELECT produto, quantidade FROM itens_pedido WHERE pedido_id=?", (ped_id,))
+            itens_rows = c.fetchall()
+            itens_str = "  ".join(
+                f"{PRODUTOS_INFO[p][0]}×{int(q)}" if p in PRODUTOS_INFO else f"{p}×{int(q)}"
+                for p, q in itens_rows
+            )
+            end_str = f"\n  📍 {endereco}" if endereco and endereco not in ("","Retirada") else ("  🏪 Retirada" if endereco == "Retirada" else "")
+            pag_emoji = "📲" if pag == "PIX" else "💵"
+            linhas.append(f"🚚 <b>#{numero}</b>  🕐 {hora}  {pag_emoji} R$ {total:.0f}\n  👤 {cliente}{end_str}\n  {itens_str}")
         conn.close()
-        saldo = get_config("saldo_banco")
-        loja_status = "🟢 Aberta" if loja_esta_aberta() else "🔴 Fechada"
-        await query.edit_message_text(
-            f"🍪 <b>COOKIE CONTROL PRO</b>\n"
-            f"━━━━━━━━━━━━━━━━━━\n"
-            f"🏪 Loja: {loja_status}\n"
-            f"📋 Pedidos hoje: <b>{qtd_hoje}</b>  |  💰 <b>R$ {total_hoje:.0f}</b>\n"
-            f"🏦 Saldo Banco: <b>R$ {saldo:.2f}</b>",
-            parse_mode="HTML", reply_markup=main_keyboard())
+        if not pendentes:
+            msg = "🚚 <b>ENTREGAS PENDENTES</b>\n━━━━━━━━━━━━━━\n\n✅ Nenhuma entrega pendente agora."
+        else:
+            msg = f"🚚 <b>ENTREGAS PENDENTES ({len(pendentes)})</b>\n━━━━━━━━━━━━━━\n\n" + "\n\n".join(linhas)
+        kb_vol = InlineKeyboardMarkup([[InlineKeyboardButton("← Menu", callback_data="admin_menu_principal")]])
+        await query.edit_message_text(msg, parse_mode="HTML", reply_markup=kb_vol)
+
+    elif query.data == "admin_agendados":
+        if not is_admin(query.from_user.id):
+            await query.answer("❌ Acesso negado.", show_alert=True); return
+        amanha = (datetime.date.today() + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+        amanha_fmt = (datetime.date.today() + datetime.timedelta(days=1)).strftime("%d/%m")
+        conn = get_db(); c = conn.cursor()
+        c.execute("""SELECT id, numero, cliente, total, pagamento, endereco
+                     FROM pedidos WHERE data_entrega=? AND status='OK'
+                     ORDER BY id ASC""", (amanha,))
+        agendados = c.fetchall()
+        linhas = []
+        for ped_id, numero, cliente, total, pag, endereco in agendados:
+            c.execute("SELECT produto, quantidade FROM itens_pedido WHERE pedido_id=?", (ped_id,))
+            itens_rows = c.fetchall()
+            itens_str = "  ".join(
+                f"{PRODUTOS_INFO[p][0]}×{int(q)}" if p in PRODUTOS_INFO else f"{p}×{int(q)}"
+                for p, q in itens_rows
+            )
+            end_str = f"\n  📍 {endereco}" if endereco and endereco not in ("","Retirada") else ("  🏪 Retirada" if endereco == "Retirada" else "")
+            pag_emoji = "📲" if pag == "PIX" else "💵"
+            linhas.append(f"📦 <b>#{numero}</b>  {pag_emoji} R$ {total:.0f}\n  👤 {cliente}{end_str}\n  {itens_str}")
+        conn.close()
+        if not agendados:
+            msg = f"📅 <b>AGENDADOS PARA {amanha_fmt}</b>\n━━━━━━━━━━━━━━\n\nNenhum pedido agendado para amanhã."
+        else:
+            msg = f"📅 <b>AGENDADOS PARA {amanha_fmt} ({len(agendados)})</b>\n━━━━━━━━━━━━━━\n\n" + "\n\n".join(linhas)
+        kb_vol = InlineKeyboardMarkup([[InlineKeyboardButton("← Menu", callback_data="admin_menu_principal")]])
+        await query.edit_message_text(msg, parse_mode="HTML", reply_markup=kb_vol)
 
     elif query.data == "admin_menu_estoque":
         if not is_admin(query.from_user.id):
@@ -1572,11 +1715,47 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML", reply_markup=kb_vol
         )
 
+    elif query.data == "socio_entregas_pendentes":
+        if not is_entregador(query.from_user):
+            await query.answer("❌ Acesso negado.", show_alert=True); return
+        hoje = datetime.date.today().strftime("%Y-%m-%d")
+        conn = get_db(); c = conn.cursor()
+        c.execute("""SELECT id, numero, cliente, total, pagamento, data, endereco, customer_chat_id
+                     FROM pedidos WHERE data LIKE ? AND status='OK' AND responsavel='Loja-Bot'
+                     ORDER BY id ASC""", (f"{hoje}%",))
+        pendentes = c.fetchall()
+        linhas = []
+        kb_rows = []
+        for ped_id, numero, cliente, total, pag, data_ped, endereco, cid in pendentes:
+            hora = data_ped[11:16] if len(data_ped) > 10 else "?"
+            c.execute("SELECT produto, quantidade FROM itens_pedido WHERE pedido_id=?", (ped_id,))
+            itens_rows = c.fetchall()
+            itens_str = "  ".join(
+                f"{PRODUTOS_INFO[p][0]}×{int(q)}" if p in PRODUTOS_INFO else f"{p}×{int(q)}"
+                for p, q in itens_rows
+            )
+            end_str = f"\n  📍 {endereco}" if endereco and endereco not in ("","Retirada") else ("  🏪 Retirada" if endereco == "Retirada" else "")
+            pag_emoji = "📲" if pag == "PIX" else "💵"
+            linhas.append(f"🚚 <b>#{numero}</b>  🕐 {hora}  {pag_emoji} R$ {total:.0f}\n  👤 {cliente}{end_str}\n  {itens_str}")
+            kb_rows.append([InlineKeyboardButton(f"✅ Entregue #{numero}", callback_data=f"entregue_{cid}_{numero}")])
+        conn.close()
+        kb_rows.append([InlineKeyboardButton("← Menu", callback_data="socio_menu_principal")])
+        kb_vol = InlineKeyboardMarkup(kb_rows)
+        if not pendentes:
+            msg = "🚚 <b>MINHAS ENTREGAS PENDENTES</b>\n━━━━━━━━━━━━━━\n\n✅ Tudo entregue! Nenhuma pendência."
+        else:
+            msg = f"🚚 <b>ENTREGAS PENDENTES ({len(pendentes)})</b>\n━━━━━━━━━━━━━━\n\n" + "\n\n".join(linhas)
+        await query.edit_message_text(msg, parse_mode="HTML", reply_markup=kb_vol)
+
     elif query.data.startswith("entregue_"):
         # entregue_{customer_chat_id}_{numero}
         partes     = query.data.split("_", 2)
         cid_str    = partes[1]
         num_pedido = partes[2] if len(partes) > 2 else "?"
+        # Atualizar status no banco
+        conn = get_db(); c = conn.cursor()
+        c.execute("UPDATE pedidos SET status='ENTREGUE' WHERE numero=?", (num_pedido,))
+        conn.commit(); conn.close()
         try:
             cid = int(cid_str)
             await context.bot.send_message(
@@ -1600,7 +1779,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 pass
         await query.edit_message_reply_markup(reply_markup=None)
-        await query.answer(f"✅ Pedido #{num_pedido} marcado como entregue!", show_alert=False)
+        await query.answer(f"✅ Pedido #{num_pedido} marcado como entregue!", show_alert=True)
 
     elif query.data in ("relatorio_semanal", "relatorio_mensal"):
         if not is_admin(query.from_user.id):
