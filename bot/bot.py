@@ -1047,99 +1047,46 @@ def build_lucro_text() -> str:
     saldo_bco = get_config("saldo_banco")
     conn = get_db(); c = conn.cursor()
 
-    hoje = datetime.date.today().strftime("%Y-%m-%d")
-    mes  = datetime.date.today().strftime("%Y-%m")
-
-    def faturado_periodo(filtro_sql, param):
-        c.execute(f"SELECT COALESCE(SUM(total),0), COUNT(*) FROM pedidos WHERE status!='CANCELADO' AND {filtro_sql}", (param,))
-        return c.fetchone()
-
-    fat_hoje,  qtd_hoje  = faturado_periodo("data LIKE ?", f"{hoje}%")
-    fat_mes,   qtd_mes   = faturado_periodo("data LIKE ?", f"{mes}%")
-    fat_total, qtd_total = c.execute(
-        "SELECT COALESCE(SUM(total),0), COUNT(*) FROM pedidos WHERE status!='CANCELADO'"
-    ).fetchone()
-
-    def pagamento_periodo(filtro_sql, param):
-        c.execute(f"""SELECT pagamento, COALESCE(SUM(total),0), COUNT(*)
-                      FROM pedidos WHERE status!='CANCELADO' AND {filtro_sql}
-                      GROUP BY pagamento""", (param,))
-        return {r[0]: (r[1], r[2]) for r in c.fetchall()}
-
-    pag_hoje  = pagamento_periodo("data LIKE ?", f"{hoje}%")
-    pag_mes   = pagamento_periodo("data LIKE ?", f"{mes}%")
-    c.execute("""SELECT pagamento, COALESCE(SUM(total),0), COUNT(*)
+    # Dinheiro em caixa por forma de pagamento (total histórico)
+    c.execute("""SELECT pagamento, COALESCE(SUM(total),0)
                  FROM pedidos WHERE status!='CANCELADO' GROUP BY pagamento""")
-    pag_total = {r[0]: (r[1], r[2]) for r in c.fetchall()}
+    pag = {r[0]: r[1] for r in c.fetchall()}
+    pix_rec  = pag.get("PIX",      0)
+    din_rec  = pag.get("DINHEIRO", 0)
+    total_rec = pix_rec + din_rec
 
-    # Retiradas por sócio
-    c.execute("SELECT UPPER(socio), COALESCE(SUM(valor),0) FROM retiradas GROUP BY UPPER(socio)")
-    ret = dict(c.fetchall())
-    ret_bart = ret.get("BART", 0)
-    ret_rd   = ret.get("RD",   0)
-    ret_total = ret_bart + ret_rd
+    # Estoque restante → quanto ainda vai entrar
+    c.execute("SELECT nome, estoque, preco_venda FROM produtos WHERE estoque > 0 ORDER BY nome")
+    prods = c.fetchall()
     conn.close()
 
-    def linha_pag(pag_dict):
-        pix_v,  pix_q  = pag_dict.get("PIX",      (0, 0))
-        din_v,  din_q  = pag_dict.get("DINHEIRO", (0, 0))
-        linhas = ""
-        if pix_v or din_v:
-            linhas += f"    💳 PIX:      R$ {pix_v:.0f} ({pix_q} ped.)\n"
-            linhas += f"    💵 Dinheiro: R$ {din_v:.0f} ({din_q} ped.)\n"
-        return linhas
-
-    def bloco(label, faturado, qtd, pag_dict):
-        lucro  = faturado - divida
-        p_socio = lucro / 2
-        linhas  = f"  💰 Faturado ({qtd} ped.): <b>R$ {faturado:.0f}</b>\n"
-        linhas += linha_pag(pag_dict)
-        linhas += f"  📦 Custo fornecedor:    <b>R$ {divida:.0f}</b>\n"
-        linhas += f"  ─────────────────────\n"
-        if lucro >= 0:
-            linhas += f"  💵 Lucro líquido:       <b>R$ {lucro:.0f}</b>\n"
-            linhas += f"  👤 Por sócio (÷ 2):    <b>R$ {p_socio:.0f}</b>\n"
-        else:
-            linhas += f"  ⚠️ Ainda no prejuízo:  <b>-R$ {abs(lucro):.0f}</b>\n"
-            linhas += f"  📊 Falta faturar:      <b>R$ {divida - faturado:.0f}</b>\n"
-        return f"📅 <b>{label}</b>\n" + linhas
+    total_pot = sum(est * preco for _, est, preco in prods)
+    lucro_proj   = (total_rec + total_pot) - divida
+    p_socio_proj = lucro_proj / 2
 
     msg  = "💵 <b>LUCRO & DIVISÃO</b>\n"
     msg += "━━━━━━━━━━━━━━━━━━━━\n\n"
-    msg += bloco("Hoje",        fat_hoje,  qtd_hoje,  pag_hoje)
-    msg += "\n"
-    msg += bloco("Este Mês",    fat_mes,   qtd_mes,   pag_mes)
-    msg += "\n"
-    msg += bloco("Total Geral", fat_total, qtd_total, pag_total)
-    # Projeção: vender todo o estoque atual
-    conn2 = get_db(); c2 = conn2.cursor()
-    c2.execute("SELECT nome, estoque, preco_venda FROM produtos WHERE estoque > 0 ORDER BY nome")
-    prods = c2.fetchall()
-    conn2.close()
+
+    msg += "🏦 <b>Dinheiro em caixa (já recebido)</b>\n"
+    msg += f"  💳 PIX:      <b>R$ {pix_rec:.0f}</b>\n"
+    msg += f"  💵 Dinheiro: <b>R$ {din_rec:.0f}</b>\n"
+    msg += f"  📊 Total:    <b>R$ {total_rec:.0f}</b>\n"
 
     msg += "\n━━━━━━━━━━━━━━━━━━━━\n"
-    msg += "🔮 <b>Projeção: se vender todo o estoque</b>\n\n"
-    total_pot = 0.0
+    msg += "🔮 <b>O que ainda vai entrar (estoque atual)</b>\n"
     for nome, est, preco in prods:
-        subtotal = est * preco
-        total_pot += subtotal
-        msg += f"  {nome}: {est:.0f} × R${preco:.0f} = <b>R$ {subtotal:.0f}</b>\n"
-    lucro_proj   = total_pot - divida
-    p_socio_proj = lucro_proj / 2
-    msg += f"\n  💰 Faturamento potencial: <b>R$ {total_pot:.0f}</b>\n"
-    msg += f"  📦 Custo fornecedor:      <b>R$ {divida:.0f}</b>\n"
-    msg += f"  ─────────────────────\n"
-    if lucro_proj >= 0:
-        msg += f"  💵 Lucro líquido:         <b>R$ {lucro_proj:.0f}</b>\n"
-        msg += f"  👤 Cada sócio (÷ 2):     <b>R$ {p_socio_proj:.0f}</b>\n"
-    else:
-        msg += f"  ⚠️ Ainda no prejuízo:    <b>-R$ {abs(lucro_proj):.0f}</b>\n"
+        msg += f"  {nome}: {est:.0f} × R${preco:.0f} = R$ {est*preco:.0f}\n"
+    msg += f"  📊 Total potencial: <b>R$ {total_pot:.0f}</b>\n"
 
     msg += "\n━━━━━━━━━━━━━━━━━━━━\n"
-    msg += "💸 <b>Retiradas já feitas</b>\n"
-    msg += f"  👤 Bart:  R$ {ret_bart:.0f}\n"
-    msg += f"  👤 RD:    R$ {ret_rd:.0f}\n"
-    msg += f"  📊 Total: R$ {ret_total:.0f}\n"
+    msg += "📦 <b>Custo fornecedor:</b>  R$ {:.0f}\n".format(divida)
+    msg += "\n"
+    if lucro_proj >= 0:
+        msg += f"💵 <b>Lucro líquido projetado: R$ {lucro_proj:.0f}</b>\n"
+        msg += f"👤 Cada sócio (÷ 2):       <b>R$ {p_socio_proj:.0f}</b>\n"
+    else:
+        msg += f"⚠️ <b>Ainda no prejuízo: -R$ {abs(lucro_proj):.0f}</b>\n"
+        msg += f"📊 Falta faturar: R$ {abs(lucro_proj):.0f} para cobrir o fornecedor\n"
     return msg
 
 def admin_financeiro_keyboard():
