@@ -2864,7 +2864,7 @@ Use português. Para perguntas sobre o estado atual, responda com "chat" e o val
             model="gpt-5-mini",
             messages=[{"role": "system", "content": system}, {"role": "user", "content": texto}],
             response_format={"type": "json_object"},
-            max_tokens=400,
+            max_completion_tokens=400,
         )
         result = json.loads(resp.choices[0].message.content)
     except Exception as e:
