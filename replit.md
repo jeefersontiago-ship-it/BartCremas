@@ -1,4 +1,4 @@
-# Cookie Stock Bot
+# Diesel Farm Bot
 
 Telegram bot (@bartcontrole_bot) para controle de estoque e pedidos de cannabis — clientes pedem pelo bot, admin confirma, entregador é notificado.
 

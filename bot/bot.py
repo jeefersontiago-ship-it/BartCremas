@@ -723,7 +723,7 @@ def build_admin_header() -> str:
     n_pix = len(pedidos_pendentes)
     loja_status = "🟢 Aberta" if loja_esta_aberta() else "🔴 Fechada"
     hora_atual  = datetime.datetime.now().strftime("%H:%M")
-    msg  = f"🍪 <b>COOKIE CONTROL PRO</b>\n"
+    msg  = f"🌱 <b>DIESEL FARM</b>\n"
     msg += f"━━━━━━━━━━━━━━━━━━\n"
     msg += f"🏪 {loja_status}  |  🕐 {hora_atual}\n"
     msg += f"━━━━━━━━━━━━━━━━━━\n"
@@ -1190,7 +1190,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         registrar_cliente(user.id, user.username or "", user.first_name or "")
         await update.message.reply_text(
-            "🖤  <b>STORE</b>\n"
+            "🌱  <b>DIESEL FARM</b>\n"
             "━━━━━━━━━━━━━━━━━━\n"
             "entrega a partir das 19:30",
             parse_mode="HTML",
