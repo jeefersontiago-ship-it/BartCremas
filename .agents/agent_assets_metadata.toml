@@ -6,8 +6,20 @@ uri = "file://attached_assets/generated_images/bart_cremas.png"
 type = "image"
 title = "bart cremas absurd art"
 
+[[generated]]
+id = "aPNarRTfypRq4ElHgq0jf"
+uri = "file://attached_assets/generated_images/bart_cremas_bcn.png"
+type = "image"
+title = "bart cremas barcelona art"
+
 [[outputs]]
 id = "9zn_vTsVDL2NJXlbB2uz0"
 uri = "file://attached_assets/generated_images/bart_cremas.png"
 type = "image"
 title = "Bart Cremas — Arte Absurda"
+
+[[outputs]]
+id = "4z8lueF0ew7klwJmHA8zC"
+uri = "file://attached_assets/generated_images/bart_cremas_bcn.png"
+type = "image"
+title = "Bart Cremas — Referência Barcelona"
