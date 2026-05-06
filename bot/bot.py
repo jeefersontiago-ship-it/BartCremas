@@ -1042,12 +1042,78 @@ def build_saldo_banco_text() -> str:
     msg += f"📤 Total saídas:   R$ {tot_sai_all:.0f}"
     return msg
 
+def build_lucro_text() -> str:
+    divida    = get_config("divida_fornecedor")
+    saldo_bco = get_config("saldo_banco")
+    conn = get_db(); c = conn.cursor()
+
+    hoje = datetime.date.today().strftime("%Y-%m-%d")
+    mes  = datetime.date.today().strftime("%Y-%m")
+
+    def faturado_periodo(filtro_sql, param):
+        c.execute(f"SELECT COALESCE(SUM(total),0), COUNT(*) FROM pedidos WHERE status!='CANCELADO' AND {filtro_sql}", (param,))
+        return c.fetchone()
+
+    fat_hoje,  qtd_hoje  = faturado_periodo("data LIKE ?", f"{hoje}%")
+    fat_mes,   qtd_mes   = faturado_periodo("data LIKE ?", f"{mes}%")
+    fat_total, qtd_total = c.execute(
+        "SELECT COALESCE(SUM(total),0), COUNT(*) FROM pedidos WHERE status!='CANCELADO'"
+    ).fetchone()
+
+    # Retiradas por sócio
+    c.execute("SELECT UPPER(socio), COALESCE(SUM(valor),0) FROM retiradas GROUP BY UPPER(socio)")
+    ret = dict(c.fetchall())
+    ret_bart = ret.get("BART", 0)
+    ret_rd   = ret.get("RD",   0)
+    ret_total = ret_bart + ret_rd
+    conn.close()
+
+    def bloco(label, faturado, qtd):
+        lucro  = faturado - divida
+        p_socio = lucro / 2
+        linhas  = f"  💰 Faturado ({qtd} ped.): <b>R$ {faturado:.0f}</b>\n"
+        linhas += f"  📦 Custo fornecedor:    <b>R$ {divida:.0f}</b>\n"
+        linhas += f"  ─────────────────────\n"
+        if lucro >= 0:
+            linhas += f"  💵 Lucro líquido:       <b>R$ {lucro:.0f}</b>\n"
+            linhas += f"  👤 Por sócio (÷ 2):    <b>R$ {p_socio:.0f}</b>\n"
+        else:
+            linhas += f"  ⚠️ Ainda no prejuízo:  <b>-R$ {abs(lucro):.0f}</b>\n"
+            linhas += f"  📊 Falta faturar:      <b>R$ {divida - faturado:.0f}</b>\n"
+        return f"📅 <b>{label}</b>\n" + linhas
+
+    msg  = "💵 <b>LUCRO & DIVISÃO</b>\n"
+    msg += "━━━━━━━━━━━━━━━━━━━━\n\n"
+    msg += bloco("Hoje",       fat_hoje,  qtd_hoje)
+    msg += "\n"
+    msg += bloco("Este Mês",   fat_mes,   qtd_mes)
+    msg += "\n"
+    msg += bloco("Total Geral", fat_total, qtd_total)
+    msg += "\n━━━━━━━━━━━━━━━━━━━━\n"
+    msg += "💸 <b>Retiradas já feitas</b>\n"
+    msg += f"  👤 Bart:  R$ {ret_bart:.0f}\n"
+    msg += f"  👤 RD:    R$ {ret_rd:.0f}\n"
+    msg += f"  📊 Total: R$ {ret_total:.0f}\n"
+    msg += "\n━━━━━━━━━━━━━━━━━━━━\n"
+    # Saldo disponível para divisão
+    saldo_disp = saldo_bco - divida
+    msg += "🏦 <b>Saldo disponível (banco - fornecedor)</b>\n"
+    if saldo_disp >= 0:
+        msg += f"  💰 Disponível:  <b>R$ {saldo_disp:.0f}</b>\n"
+        msg += f"  👤 Bart:  R$ {saldo_disp/2:.0f}   (já retirou R$ {ret_bart:.0f})\n"
+        msg += f"  👤 RD:    R$ {saldo_disp/2:.0f}   (já retirou R$ {ret_rd:.0f})\n"
+    else:
+        msg += f"  ⚠️ Saldo insuficiente para cobrir fornecedor\n"
+        msg += f"  📉 Déficit: R$ {abs(saldo_disp):.0f}\n"
+    return msg
+
 def admin_financeiro_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("💰 Retiradas Bart & RD", callback_data="retiradas_menu")],
         [InlineKeyboardButton("💸 Saída de Caixa",     callback_data="admin_saida_input"),
          InlineKeyboardButton("🏦 Saldo Banco",        callback_data="saldo_banco_menu")],
         [InlineKeyboardButton("🏭 Dívida Fornecedor",  callback_data="admin_fornecedor_input")],
+        [InlineKeyboardButton("💵 Lucro & Divisão",    callback_data="lucro_menu")],
         [InlineKeyboardButton("📅 Relatório por Data",    callback_data="admin_relatorio_data")],
         [InlineKeyboardButton("📅 Relatório Semanal",   callback_data="relatorio_semanal"),
          InlineKeyboardButton("📅 Relatório Mensal",    callback_data="relatorio_mensal")],
@@ -1886,6 +1952,16 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("← Financeiro",         callback_data="admin_menu_financeiro")],
         ])
         await query.edit_message_text(build_saldo_banco_text(), parse_mode="HTML", reply_markup=kb)
+
+    elif query.data == "lucro_menu":
+        if not is_admin(query.from_user.id):
+            await query.answer("❌ Acesso negado.", show_alert=True); return
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔄 Atualizar",         callback_data="lucro_menu")],
+            [InlineKeyboardButton("🏭 Ajustar Fornecedor", callback_data="admin_fornecedor_input")],
+            [InlineKeyboardButton("← Financeiro",          callback_data="admin_menu_financeiro")],
+        ])
+        await query.edit_message_text(build_lucro_text(), parse_mode="HTML", reply_markup=kb)
 
     elif query.data == "retiradas_menu":
         if not is_admin(query.from_user.id):
