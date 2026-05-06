@@ -23,10 +23,11 @@ ENTREGADOR_USERNAME  = "@jRDG7"
 pedidos_pendentes: dict = {}  # customer_chat_id -> order_data
 
 PRODUTOS_INFO = {
-    "ICE":     ("🍦 Ice o Lator", 140.0, "g"),
-    "PAK":     ("🥐 Pak",          60.0, "g"),
-    "CRUMBLE": ("🍪 Crumble",     180.0, "g"),
-    "POD":     ("🪦 Pod THC",     450.0, "un"),
+    "ICE":     ("🍦 Ice Cream Cake",  140.0, "g"),
+    "PAK":     ("🥐 Pak Nutella",      60.0, "g"),
+    "CRUMBLE": ("🍪 Crumble",         180.0, "g"),
+    "POD_I":   ("🪦 Pod THC Indica",  450.0, "un"),
+    "POD_S":   ("🌿 Pod THC Sativa",  450.0, "un"),
 }
 
 def is_admin(user_id):
@@ -95,15 +96,26 @@ def init_db():
         c.execute("DROP TABLE itens_entrega")
 
     produtos = [
-        ("ICE",     "🍦 Ice o Lator", 375.0, 140.0),
-        ("PAK",     "🥐 Pak",          170.0,  60.0),
-        ("CRUMBLE", "🍪 Crumble",       83.0, 180.0),
-        ("POD",     "🪦 Pod THC",        8.0, 450.0),
+        ("ICE",     "🍦 Ice Cream Cake",  375.0, 140.0),
+        ("PAK",     "🥐 Pak Nutella",     170.0,  60.0),
+        ("CRUMBLE", "🍪 Crumble",          83.0, 180.0),
+        ("POD_I",   "🪦 Pod THC Indica",    3.0, 450.0),
+        ("POD_S",   "🌿 Pod THC Sativa",    4.0, 450.0),
     ]
     c.executemany("INSERT OR IGNORE INTO produtos VALUES (?,?,?,?)", produtos)
+    # Update display names
     for cod, nome, _, _ in produtos:
-        c.execute("UPDATE produtos SET nome=? WHERE codigo=? AND nome NOT LIKE ?",
-                  (nome, cod, f"%{nome[-5:]}%"))
+        c.execute("UPDATE produtos SET nome=? WHERE codigo=?", (nome, cod))
+    # Migrate old POD stock into POD_I/POD_S if it exists with stock > 0
+    c.execute("SELECT estoque FROM produtos WHERE codigo='POD'")
+    old_pod = c.fetchone()
+    if old_pod and old_pod[0] > 0:
+        total = old_pod[0]
+        sativa  = round(total / 2 + 0.5)
+        indica  = total - sativa
+        c.execute("UPDATE produtos SET estoque = estoque + ? WHERE codigo='POD_I'", (indica,))
+        c.execute("UPDATE produtos SET estoque = estoque + ? WHERE codigo='POD_S'", (sativa,))
+        c.execute("UPDATE produtos SET estoque=0 WHERE codigo='POD'")
 
     c.execute("INSERT OR IGNORE INTO config VALUES ('saldo_banco', 0)")
     c.execute("INSERT OR IGNORE INTO config VALUES ('divida_fornecedor', 74890)")
@@ -115,8 +127,18 @@ init_db()
 
 # ====================== HELPERS ======================
 
-CODIGOS = {"ICE", "PAK", "CRUMBLE", "POD"}
-ALIAS   = {"I": "ICE", "P": "PAK", "C": "CRUMBLE", "VP": "POD"}
+CODIGOS = {"ICE", "PAK", "CRUMBLE", "POD_I", "POD_S"}
+ALIAS   = {
+    "I":    "ICE",
+    "P":    "PAK",
+    "C":    "CRUMBLE",
+    "PI":   "POD_I",
+    "PS":   "POD_S",
+    "PODI": "POD_I",
+    "PODS": "POD_S",
+    "POD":  "POD_I",   # fallback legado
+    "VP":   "POD_I",   # alias antigo
+}
 
 def estoque_emoji(qtd):
     if qtd <= 0:  return "❌"
@@ -203,7 +225,7 @@ def build_relatorio_text(hoje):
         rel += f"   💸 Saídas → R$ {total_saidas:.2f}\n"
         rel += f"   <b>Líquido: R$ {total_vendido - total_saidas:.2f}</b>\n"
     rel += "\n📦 <b>Saídas do Dia:</b>\n"
-    for cod in ["ICE", "PAK", "CRUMBLE", "POD"]:
+    for cod in ["ICE", "PAK", "CRUMBLE", "POD_I", "POD_S"]:
         rel += f"   • {cod}: <b>{saidas.get(cod, 0):.1f}</b>\n"
     rel += "\n📦 <b>Estoque Restante:</b>\n"
     for cod, nome, qtd in estoque_atual:
@@ -551,10 +573,11 @@ async def calcular_pedido(update: Update, context: ContextTypes.DEFAULT_TYPE, te
     subtotal = 0.0
 
     for line in texto.upper().split("\n"):
-        match = re.search(r'(\d+(?:[.,]\d+)?)\s*(ICE|PAK|CRUMBLE|POD)', line)
+        match = re.search(r'(\d+(?:[.,]\d+)?)\s*(ICE|PAK|CRUMBLE|POD_I|POD_S|PODI|PODS|POD)', line)
         if match:
             qtd  = float(match.group(1).replace(",", "."))
             prod = match.group(2)
+            prod = ALIAS.get(prod, prod)   # normaliza PODI/PODS/POD → POD_I/POD_S
             c.execute("SELECT preco_venda FROM produtos WHERE codigo=?", (prod,))
             row = c.fetchone()
             if row:
@@ -1089,7 +1112,7 @@ async def processar_mensagem(update: Update, context: ContextTypes.DEFAULT_TYPE)
         context.user_data["estado"]  = "esperando_itens"
         await update.message.reply_text(
             "🛒 Envie os itens (um por linha):\n\n"
-            "<code>5 PAK\n2 ICE\n1 POD</code>",
+            "<code>5 PAK\n2 ICE\n1 POD_I\n1 POD_S</code>",
             parse_mode="HTML"
         )
         return
@@ -1278,7 +1301,7 @@ async def processar_mensagem(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         for line in lines:
             line_u = line.upper()
-            for prod in ["ICE", "PAK", "CRUMBLE", "POD"]:
+            for prod in ["ICE", "PAK", "CRUMBLE", "POD_I", "POD_S"]:
                 if prod in line_u:
                     q = re.search(r'(\d+(?:[.,]\d+)?)', line.replace(",", "."))
                     if q:
