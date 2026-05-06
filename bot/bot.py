@@ -14,9 +14,20 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-ADMIN_ID  = int(os.getenv("ADMIN_ID", "0"))
-CHAVE_PIX = os.getenv("CHAVE_PIX", "")
-DB_PATH   = os.path.join(os.path.dirname(__file__), "controle.db")
+ADMIN_ID             = int(os.getenv("ADMIN_ID", "0"))
+CHAVE_PIX            = os.getenv("CHAVE_PIX", "")
+DB_PATH              = os.path.join(os.path.dirname(__file__), "controle.db")
+ENTREGADOR_USERNAME  = "@jRDG7"
+
+# Pedidos de clientes aguardando confirmação de pagamento (em memória)
+pedidos_pendentes: dict = {}  # customer_chat_id -> order_data
+
+PRODUTOS_INFO = {
+    "ICE":     ("🍦 Ice o Lator", 140.0, "g"),
+    "PAK":     ("🥐 Pak",          60.0, "g"),
+    "CRUMBLE": ("🍪 Crumble",     180.0, "g"),
+    "POD":     ("🪦 Pod THC",     450.0, "un"),
+}
 
 def is_admin(user_id):
     return ADMIN_ID != 0 and user_id == ADMIN_ID
@@ -207,18 +218,50 @@ def main_keyboard():
         [InlineKeyboardButton("📊 Relatório do Dia",  callback_data="relatorio")],
     ])
 
+def customer_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🛒 Fazer Pedido",           callback_data="loja_iniciar")],
+        [InlineKeyboardButton("📋 Ver Produtos e Preços",  callback_data="loja_produtos")],
+    ])
+
+def build_cart_keyboard(carrinho: dict) -> InlineKeyboardMarkup:
+    rows = []
+    for cod, (nome, preco, unidade) in PRODUTOS_INFO.items():
+        qtd = carrinho.get(cod, 0)
+        rows.append([InlineKeyboardButton(f"{nome}  •  R${preco:.0f}/{unidade}", callback_data="noop")])
+        rows.append([
+            InlineKeyboardButton("➖", callback_data=f"loja_rem_{cod}"),
+            InlineKeyboardButton(f"{qtd} {unidade}", callback_data="noop"),
+            InlineKeyboardButton("➕", callback_data=f"loja_add_{cod}"),
+        ])
+    rows.append([
+        InlineKeyboardButton("✅ Confirmar Pedido", callback_data="loja_confirmar"),
+        InlineKeyboardButton("❌ Cancelar",          callback_data="loja_cancelar"),
+    ])
+    return InlineKeyboardMarkup(rows)
+
 # ====================== COMANDOS ======================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
-    await update.message.reply_text(
-        "🍪 <b>Cookie Control Pro</b>\n"
-        "━━━━━━━━━━━━━━━━━━\n"
-        "Sistema profissional de controle\n"
-        "Escolha uma opção abaixo 👇",
-        parse_mode="HTML",
-        reply_markup=main_keyboard()
-    )
+    if is_admin(update.effective_user.id):
+        await update.message.reply_text(
+            "🍪 <b>Cookie Control Pro</b>\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "Sistema profissional de controle\n"
+            "Escolha uma opção abaixo 👇",
+            parse_mode="HTML",
+            reply_markup=main_keyboard()
+        )
+    else:
+        nome = update.effective_user.first_name or "cliente"
+        await update.message.reply_text(
+            f"👋 Olá, <b>{nome}</b>! Bem-vindo à nossa loja 🍪\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "Escolha uma opção abaixo:",
+            parse_mode="HTML",
+            reply_markup=customer_keyboard()
+        )
 
 async def cmd_estoque(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(build_estoque_text(), parse_mode="HTML")
@@ -530,6 +573,58 @@ async def salvar_pedido_guiado(update: Update, context: ContextTypes.DEFAULT_TYP
     )
     context.user_data.clear()
 
+# ====================== COMPROVANTE PIX (CLIENTE) ======================
+
+async def handle_comprovante(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if context.user_data.get("estado") != "cliente_comprovante":
+        return
+    pedido = context.user_data.get("pedido_pendente")
+    if not pedido:
+        return
+
+    customer_id = update.effective_chat.id
+    pedidos_pendentes[customer_id] = pedido
+
+    user = update.effective_user
+    contato = f"@{user.username}" if user.username else f"<a href='tg://user?id={customer_id}'>{user.first_name}</a>"
+
+    itens_str = "\n".join(
+        f"   • {q} {PRODUTOS_INFO[p][2]} × {PRODUTOS_INFO[p][0]}"
+        for p, q in pedido["itens"].items() if q > 0
+    )
+    taxa_str = f"\n📌 Taxa entrega: R$ {pedido['taxa']:.2f}" if pedido["taxa"] > 0 else ""
+
+    msg = (
+        f"🔔 <b>NOVO PEDIDO — AGUARDANDO CONFIRMAÇÃO</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"👤 Cliente: {pedido['nome_cliente']} ({contato})\n\n"
+        f"{itens_str}\n"
+        f"💰 Total: R$ {pedido['total']:.2f}{taxa_str}\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"Comprovante PIX acima 👆"
+    )
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Confirmar Pagamento", callback_data=f"pgto_ok_{customer_id}")],
+        [InlineKeyboardButton("❌ Recusar Pagamento",   callback_data=f"pgto_rec_{customer_id}")],
+    ])
+
+    photo = update.message.photo[-1].file_id
+    await context.bot.send_photo(
+        chat_id=ADMIN_ID,
+        photo=photo,
+        caption=msg,
+        parse_mode="HTML",
+        reply_markup=keyboard
+    )
+
+    await update.message.reply_text(
+        "✅ <b>Comprovante recebido!</b>\n\n"
+        "Aguarde a confirmação do pagamento.\n"
+        "Você será avisado assim que confirmado. 🙏",
+        parse_mode="HTML"
+    )
+    context.user_data["estado"] = "aguardando_confirmacao"
+
 # ====================== CALLBACK BUTTONS ======================
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -619,6 +714,184 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "O estoque não foi alterado.",
             parse_mode="HTML"
         )
+
+    # ====================== LOJA (CLIENTE) ======================
+
+    elif query.data == "noop":
+        pass  # quantity display buttons — do nothing
+
+    elif query.data == "loja_iniciar":
+        context.user_data.clear()
+        context.user_data["carrinho"] = {c: 0 for c in PRODUTOS_INFO}
+        context.user_data["estado"]   = "cliente_carrinho"
+        await query.edit_message_text(
+            "🛒 <b>Monte seu pedido:</b>\n\n"
+            "Use ➕ para adicionar e ➖ para remover.\n"
+            "Quando terminar, toque em <b>✅ Confirmar Pedido</b>.",
+            parse_mode="HTML",
+            reply_markup=build_cart_keyboard(context.user_data["carrinho"])
+        )
+
+    elif query.data == "loja_produtos":
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("SELECT codigo, nome, preco_venda, estoque FROM produtos ORDER BY codigo")
+        rows = c.fetchall()
+        conn.close()
+        msg = "📋 <b>PRODUTOS DISPONÍVEIS</b>\n━━━━━━━━━━━━━━\n\n"
+        for cod, nome, preco, estoque in rows:
+            unidade = PRODUTOS_INFO[cod][2]
+            disp = "✅ Disponível" if estoque > 0 else "❌ Esgotado"
+            msg += f"{nome}\n💰 R$ {preco:.0f}/{unidade}  {disp}\n\n"
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🛒 Fazer Pedido", callback_data="loja_iniciar")]])
+        await query.edit_message_text(msg, parse_mode="HTML", reply_markup=kb)
+
+    elif query.data.startswith("loja_add_") or query.data.startswith("loja_rem_"):
+        parts  = query.data.split("_")
+        action = parts[1]   # "add" or "rem"
+        cod    = parts[2]   # "ICE", "PAK", etc.
+        carrinho = context.user_data.get("carrinho", {c: 0 for c in PRODUTOS_INFO})
+        if action == "add":
+            conn = get_db()
+            cur  = conn.cursor()
+            cur.execute("SELECT estoque FROM produtos WHERE codigo=?", (cod,))
+            estoque = cur.fetchone()[0]
+            conn.close()
+            if carrinho.get(cod, 0) >= int(estoque):
+                await query.answer("⚠️ Estoque insuficiente!", show_alert=True)
+                return
+            carrinho[cod] = carrinho.get(cod, 0) + 1
+        else:
+            carrinho[cod] = max(0, carrinho.get(cod, 0) - 1)
+        context.user_data["carrinho"] = carrinho
+        try:
+            await query.edit_message_reply_markup(reply_markup=build_cart_keyboard(carrinho))
+        except Exception:
+            pass
+
+    elif query.data == "loja_confirmar":
+        carrinho = context.user_data.get("carrinho", {})
+        itens    = {k: v for k, v in carrinho.items() if v > 0}
+        if not itens:
+            await query.answer("⚠️ Adicione pelo menos um produto!", show_alert=True)
+            return
+        subtotal = sum(itens[cod] * PRODUTOS_INFO[cod][1] for cod in itens)
+        taxa     = 10.0 if subtotal < 500 else 0.0
+        total    = subtotal + taxa
+        user     = query.from_user
+        context.user_data["pedido_pendente"] = {
+            "itens":          itens,
+            "subtotal":       subtotal,
+            "taxa":           taxa,
+            "total":          total,
+            "nome_cliente":   user.first_name or "Cliente",
+            "customer_contact": f"@{user.username}" if user.username else f"ID:{user.id}",
+        }
+        context.user_data["estado"] = "cliente_comprovante"
+        itens_str = "\n".join(
+            f"   • {q} {PRODUTOS_INFO[p][2]} × {PRODUTOS_INFO[p][0]}"
+            for p, q in itens.items()
+        )
+        taxa_str = f"\n📌 Taxa entrega: R$ {taxa:.2f}" if taxa > 0 else ""
+        msg = (
+            f"📋 <b>RESUMO DO PEDIDO</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n\n"
+            f"{itens_str}\n\n"
+            f"💰 Subtotal: R$ {subtotal:.2f}{taxa_str}\n"
+            f"💎 <b>Total: R$ {total:.2f}</b>\n\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"💳 <b>Pague via PIX:</b>\n"
+            f"<code>{CHAVE_PIX}</code>\n\n"
+            f"📸 Após o pagamento, <b>envie o comprovante aqui como foto</b>."
+        )
+        await query.edit_message_text(msg, parse_mode="HTML")
+
+    elif query.data == "loja_cancelar":
+        context.user_data.clear()
+        await query.edit_message_text("❌ Pedido cancelado.\n\nUse /start para voltar ao menu.")
+
+    # ====================== CONFIRMAÇÃO ADMIN ======================
+
+    elif query.data.startswith("pgto_ok_"):
+        if not is_admin(query.from_user.id):
+            await query.answer("❌ Acesso negado.", show_alert=True)
+            return
+        customer_id = int(query.data.split("_")[-1])
+        pedido      = pedidos_pendentes.pop(customer_id, None)
+        if not pedido:
+            await query.edit_message_caption("⚠️ Pedido não encontrado ou já processado.")
+            return
+        # Salvar no banco
+        conn     = get_db()
+        c        = conn.cursor()
+        data_now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+        numero   = datetime.datetime.now().strftime("%d%H%M")
+        c.execute(
+            "INSERT INTO pedidos (numero, cliente, total, taxa, pagamento, responsavel, data, status) VALUES (?,?,?,?,?,?,?,?)",
+            (numero, pedido["nome_cliente"], pedido["total"], pedido["taxa"], "PIX", "Loja-Bot", data_now, "OK")
+        )
+        pedido_id = c.lastrowid
+        for prod, qtd in pedido["itens"].items():
+            if qtd > 0:
+                c.execute("INSERT INTO itens_pedido VALUES (?,?,?)", (pedido_id, prod, qtd))
+                c.execute("UPDATE produtos SET estoque = estoque - ? WHERE codigo = ?", (qtd, prod))
+        conn.commit()
+        conn.close()
+        registrar_caixa("entrada", pedido["total"], f"Pedido #{numero} - {pedido['nome_cliente']}")
+        # Notificar entregador
+        itens_entrega = "\n".join(
+            f"• {q} {PRODUTOS_INFO[p][2]} {PRODUTOS_INFO[p][0]}"
+            for p, q in pedido["itens"].items() if q > 0
+        )
+        try:
+            await context.bot.send_message(
+                chat_id=ENTREGADOR_USERNAME,
+                text=(
+                    f"🚚 <b>NOVA ENTREGA!</b>\n"
+                    f"━━━━━━━━━━━━━━\n"
+                    f"👤 Cliente: {pedido['nome_cliente']}\n"
+                    f"📱 Contato: {pedido['customer_contact']}\n\n"
+                    f"{itens_entrega}\n\n"
+                    f"💰 Total: R$ {pedido['total']:.2f} (PIX ✅ confirmado)"
+                ),
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            logging.warning(f"Não foi possível notificar entregador: {e}")
+        # Notificar cliente
+        await context.bot.send_message(
+            chat_id=customer_id,
+            text=(
+                "✅ <b>Pagamento confirmado!</b>\n\n"
+                "🚚 Seu pedido foi aceito e o entregador já foi notificado.\n"
+                "Em breve ele entrará em contato para combinar a entrega.\n\n"
+                "⏰ Horário de entrega: após as 19:30"
+            ),
+            parse_mode="HTML"
+        )
+        await query.edit_message_caption(
+            f"✅ <b>Pedido #{numero} confirmado!</b>\n"
+            f"👤 {pedido['nome_cliente']} — R$ {pedido['total']:.2f}\n"
+            "Estoque debitado. Entregador notificado. ✅",
+            parse_mode="HTML"
+        )
+
+    elif query.data.startswith("pgto_rec_"):
+        if not is_admin(query.from_user.id):
+            await query.answer("❌ Acesso negado.", show_alert=True)
+            return
+        customer_id = int(query.data.split("_")[-1])
+        pedidos_pendentes.pop(customer_id, None)
+        await context.bot.send_message(
+            chat_id=customer_id,
+            text=(
+                "❌ <b>Pagamento não identificado.</b>\n\n"
+                "Não conseguimos confirmar o seu PIX.\n"
+                "Verifique e tente novamente ou entre em contato conosco."
+            ),
+            parse_mode="HTML"
+        )
+        await query.edit_message_caption("❌ Pagamento recusado. Cliente notificado.")
 
 # ====================== MESSAGE HANDLER ======================
 
@@ -778,6 +1051,7 @@ def main():
     app.add_handler(CommandHandler("resetdia",      reset_dia))
     app.add_handler(CommandHandler("resetcompleto", reset_completo))
     app.add_handler(CallbackQueryHandler(callback_handler))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_comprovante))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, processar_mensagem))
 
     logging.info("Bot iniciado...")
