@@ -1060,6 +1060,18 @@ def build_lucro_text() -> str:
         "SELECT COALESCE(SUM(total),0), COUNT(*) FROM pedidos WHERE status!='CANCELADO'"
     ).fetchone()
 
+    def pagamento_periodo(filtro_sql, param):
+        c.execute(f"""SELECT pagamento, COALESCE(SUM(total),0), COUNT(*)
+                      FROM pedidos WHERE status!='CANCELADO' AND {filtro_sql}
+                      GROUP BY pagamento""", (param,))
+        return {r[0]: (r[1], r[2]) for r in c.fetchall()}
+
+    pag_hoje  = pagamento_periodo("data LIKE ?", f"{hoje}%")
+    pag_mes   = pagamento_periodo("data LIKE ?", f"{mes}%")
+    c.execute("""SELECT pagamento, COALESCE(SUM(total),0), COUNT(*)
+                 FROM pedidos WHERE status!='CANCELADO' GROUP BY pagamento""")
+    pag_total = {r[0]: (r[1], r[2]) for r in c.fetchall()}
+
     # Retiradas por sócio
     c.execute("SELECT UPPER(socio), COALESCE(SUM(valor),0) FROM retiradas GROUP BY UPPER(socio)")
     ret = dict(c.fetchall())
@@ -1068,10 +1080,20 @@ def build_lucro_text() -> str:
     ret_total = ret_bart + ret_rd
     conn.close()
 
-    def bloco(label, faturado, qtd):
+    def linha_pag(pag_dict):
+        pix_v,  pix_q  = pag_dict.get("PIX",      (0, 0))
+        din_v,  din_q  = pag_dict.get("DINHEIRO", (0, 0))
+        linhas = ""
+        if pix_v or din_v:
+            linhas += f"    💳 PIX:      R$ {pix_v:.0f} ({pix_q} ped.)\n"
+            linhas += f"    💵 Dinheiro: R$ {din_v:.0f} ({din_q} ped.)\n"
+        return linhas
+
+    def bloco(label, faturado, qtd, pag_dict):
         lucro  = faturado - divida
         p_socio = lucro / 2
         linhas  = f"  💰 Faturado ({qtd} ped.): <b>R$ {faturado:.0f}</b>\n"
+        linhas += linha_pag(pag_dict)
         linhas += f"  📦 Custo fornecedor:    <b>R$ {divida:.0f}</b>\n"
         linhas += f"  ─────────────────────\n"
         if lucro >= 0:
@@ -1084,11 +1106,11 @@ def build_lucro_text() -> str:
 
     msg  = "💵 <b>LUCRO & DIVISÃO</b>\n"
     msg += "━━━━━━━━━━━━━━━━━━━━\n\n"
-    msg += bloco("Hoje",       fat_hoje,  qtd_hoje)
+    msg += bloco("Hoje",        fat_hoje,  qtd_hoje,  pag_hoje)
     msg += "\n"
-    msg += bloco("Este Mês",   fat_mes,   qtd_mes)
+    msg += bloco("Este Mês",    fat_mes,   qtd_mes,   pag_mes)
     msg += "\n"
-    msg += bloco("Total Geral", fat_total, qtd_total)
+    msg += bloco("Total Geral", fat_total, qtd_total, pag_total)
     # Projeção: vender todo o estoque atual
     conn2 = get_db(); c2 = conn2.cursor()
     c2.execute("SELECT nome, estoque, preco_venda FROM produtos WHERE estoque > 0 ORDER BY nome")
