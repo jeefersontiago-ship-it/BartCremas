@@ -296,9 +296,13 @@ def customer_keyboard():
         [InlineKeyboardButton("📦  ver cardápio",    callback_data="loja_produtos")],
     ])
 
-def entregador_keyboard():
+def socio_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📦  ver cardápio",    callback_data="loja_produtos")],
+        [InlineKeyboardButton("📦 Estoque",         callback_data="estoque"),
+         InlineKeyboardButton("💰 Caixa do Dia",    callback_data="caixa")],
+        [InlineKeyboardButton("📊 Relatório Hoje",  callback_data="relatorio")],
+        [InlineKeyboardButton("📋 Pedidos do Dia",  callback_data="socio_pedidos")],
+        [InlineKeyboardButton("🛍️  ver cardápio",   callback_data="loja_produtos")],
     ])
 
 def build_cart_text(carrinho: dict) -> str:
@@ -355,11 +359,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     elif is_entregador(user):
         await update.message.reply_text(
-            "🛵  <b>CARDÁPIO</b>\n"
+            "🛵  <b>PAINEL DO SÓCIO</b>\n"
             "━━━━━━━━━━━━━━━━━━\n"
-            "Consulta de produtos disponíveis:",
+            "Consultas disponíveis:",
             parse_mode="HTML",
-            reply_markup=entregador_keyboard()
+            reply_markup=socio_keyboard()
         )
     else:
         await update.message.reply_text(
@@ -784,7 +788,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("👤 Digite o nome do cliente:")
 
     elif query.data == "estoque":
-        await query.edit_message_text(build_estoque_text(), parse_mode="HTML")
+        voltar = "admin_menu_principal" if is_admin(query.from_user.id) else "socio_menu_principal"
+        kb_vol = InlineKeyboardMarkup([[InlineKeyboardButton("← Menu", callback_data=voltar)]])
+        await query.edit_message_text(build_estoque_text(), parse_mode="HTML", reply_markup=kb_vol)
 
     elif query.data == "caixa":
         hoje = datetime.date.today().strftime("%Y-%m-%d")
@@ -800,17 +806,46 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for tipo, total in rows:
             msg += f"{'Entradas' if tipo == 'entrada' else 'Saídas'}: R$ {total:.2f}\n"
         msg += f"\n<b>Saldo: R$ {saldo:.2f}</b>"
-        await query.edit_message_text(msg, parse_mode="HTML")
+        voltar = "admin_menu_principal" if is_admin(query.from_user.id) else "socio_menu_principal"
+        kb_vol = InlineKeyboardMarkup([[InlineKeyboardButton("← Menu", callback_data=voltar)]])
+        await query.edit_message_text(msg, parse_mode="HTML", reply_markup=kb_vol)
 
     elif query.data == "relatorio":
-        if not is_admin(query.from_user.id):
+        if not is_admin(query.from_user.id) and not is_entregador(query.from_user):
             await query.edit_message_text("❌ Acesso negado.")
             return
         hoje = datetime.datetime.now().strftime("%Y-%m-%d")
-        kb_vol = InlineKeyboardMarkup([[InlineKeyboardButton("← Menu", callback_data="admin_menu_principal")]])
+        voltar = "admin_menu_principal" if is_admin(query.from_user.id) else "socio_menu_principal"
+        kb_vol = InlineKeyboardMarkup([[InlineKeyboardButton("← Menu", callback_data=voltar)]])
         await query.edit_message_text(build_relatorio_text(hoje), parse_mode="HTML", reply_markup=kb_vol)
 
     # ====================== MENU ADMIN ======================
+
+    elif query.data == "socio_menu_principal":
+        if not is_entregador(query.from_user):
+            await query.answer("❌ Acesso negado.", show_alert=True); return
+        await query.edit_message_text(
+            "🛵  <b>PAINEL DO SÓCIO</b>\n━━━━━━━━━━━━━━━━━━\nConsultas disponíveis:",
+            parse_mode="HTML", reply_markup=socio_keyboard())
+
+    elif query.data == "socio_pedidos":
+        if not is_entregador(query.from_user):
+            await query.answer("❌ Acesso negado.", show_alert=True); return
+        hoje = datetime.date.today().strftime("%Y-%m-%d")
+        conn = get_db(); c = conn.cursor()
+        c.execute("""SELECT numero, cliente, total, pagamento, data
+                     FROM pedidos WHERE status='OK' AND data LIKE ?
+                     ORDER BY id DESC""", (f"{hoje}%",))
+        pedidos = c.fetchall(); conn.close()
+        if not pedidos:
+            msg = "📋 <b>PEDIDOS DO DIA</b>\n━━━━━━━━━━━━━━\n\nNenhum pedido hoje ainda."
+        else:
+            msg = f"📋 <b>PEDIDOS DO DIA</b> ({len(pedidos)})\n━━━━━━━━━━━━━━\n\n"
+            for num, cli, tot, pag, data in pedidos:
+                hora = data[11:16] if len(data) > 10 else ""
+                msg += f"🔢 #{num}  🕐 {hora}\n👤 {cli}  💰 R$ {tot:.2f}  [{pag}]\n\n"
+        kb_vol = InlineKeyboardMarkup([[InlineKeyboardButton("← Menu", callback_data="socio_menu_principal")]])
+        await query.edit_message_text(msg, parse_mode="HTML", reply_markup=kb_vol)
 
     elif query.data == "admin_menu_principal":
         if not is_admin(query.from_user.id):
@@ -1034,7 +1069,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         entrega = is_entregador(query.from_user)
         if entrega:
             kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔄 Atualizar", callback_data="loja_produtos")],
+                [InlineKeyboardButton("🔄 Atualizar",  callback_data="loja_produtos")],
+                [InlineKeyboardButton("← Menu",        callback_data="socio_menu_principal")],
             ])
         else:
             kb = InlineKeyboardMarkup([
@@ -1130,11 +1166,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.clear()
         if is_entregador(query.from_user):
             await query.edit_message_text(
-                "🛵  <b>CARDÁPIO</b>\n"
+                "🛵  <b>PAINEL DO SÓCIO</b>\n"
                 "━━━━━━━━━━━━━━━━━━\n"
-                "Consulta de produtos disponíveis:",
+                "Consultas disponíveis:",
                 parse_mode="HTML",
-                reply_markup=entregador_keyboard()
+                reply_markup=socio_keyboard()
             )
         else:
             await query.edit_message_text(
