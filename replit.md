@@ -1,56 +1,77 @@
 # Cookie Stock Bot
 
-A Telegram bot for tracking cookie flavor inventory — deduct stock by sending a message like `I 3`, check current levels with `/estoque`.
+Telegram bot (@bartcontrole_bot) para controle de estoque e pedidos de cannabis — clientes pedem pelo bot, admin confirma, entregador é notificado.
 
 ## Run & Operate
 
-- `python bot/bot.py` — run the Telegram bot (managed via "Telegram Bot" workflow)
-- Required env: `TELEGRAM_BOT_TOKEN` — Telegram bot token from @BotFather
+- `python bot/bot.py` — roda o bot (workflow "Telegram Bot")
+- Env vars obrigatórias: `TELEGRAM_BOT_TOKEN`, `ADMIN_ID`, `CHAVE_PIX`, `SESSION_SECRET`
 
 ## Stack
 
 - Python 3.11
 - python-telegram-bot (polling mode)
-- JSON file for persistent storage (`bot/estoque.json`)
+- SQLite (`bot/controle.db`) para persistência
 
 ## Where things live
 
-- `bot/bot.py` — main bot logic
-- `bot/estoque.json` — stock data (auto-created on first run)
+- `bot/bot.py` — toda a lógica do bot (~2000 linhas)
+- `bot/controle.db` — banco SQLite; tabelas: `produtos`, `pedidos`, `itens_pedido`, `caixa`, `retiradas`, `config`, `clientes`
+- `bot/fotos.json` — file_ids do Telegram para as 5 fotos de produto
+- `bot/fotos_local/` — fotos locais (ICE.jpg, PAK.jpg, CRUMBLE.jpg, POD_I.png, POD_S.jpg)
 
 ## Architecture decisions
 
-- Polling mode (not webhook) for simplicity in the Replit environment
-- Stock stored as a flat JSON file — no DB needed for this use case
-- Each message handler reloads and saves the JSON on every operation to avoid data loss
+- Polling mode (não webhook) para simplicidade no Replit
+- JSON flat para fotos, SQLite para tudo mais — sem dependências externas
+- `pedidos_pendentes` é um dict em memória: temporário enquanto aguarda confirmação do admin
+- Colunas adicionadas via `ALTER TABLE` em `init_db()` para migrações sem perda de dados
+- Broadcast lê `clientes.chat_id` — populado no /start de cada cliente
 
 ## Product
 
-Telegram bot for cannabis inventory + ordering:
-- **ICE** = Ice o Lator | **PAK** = Pak | **CRUMBLE** = Crumble | **POD** = Pod THC
+**Produtos:** ICE (Ice Cream Cake) | PAK (Pak Nutella) | CRUMBLE | POD_I (Pod Indica) | POD_S (Pod Sativa)
 
-**Admin menu (owner only):**
+**Fluxo do cliente:**
+1. /start → store → 🛒 pedir agora (bloqueado se loja fechada)
+2. Selecionar itens no carrinho → fechar pedido
+3. Informar endereço de entrega (ou "Vou retirar")
+4. Escolher PIX ou Dinheiro
+5. PIX: enviar comprovante (expira em 20 min) → admin confirma → entregador notificado
+6. Dinheiro: informar troco → confirmar → admin + entregador notificados
+7. Entregador clica "✅ Marcar como Entregue" → cliente recebe confirmação
+
+**Admin (ADMIN_ID):**
 - 📋 Novo Pedido / 📦 Estoque / 💰 Caixa / 📊 Relatório Hoje
-- 🏪 Gestão de Estoque → ➕ Adicionar / ➖ Remover (guided input)
-- 💸 Financeiro → Retirada RD/Bart, Saída Caixa, Saldo Banco, Dívida Fornecedor, Relatório por Data, Reset Dia/Completo
-- ❌ Cancelar Último Pedido (with confirmation)
+- 🏪 Gestão de Estoque → Adicionar / Remover / Fotos dos Produtos
+- 💸 Financeiro → Retiradas, Saída Caixa, Saldo Banco, Dívida Fornecedor, Relatório por Data, Semanal, Mensal, Reset
+- 📢 Broadcast → mensagem para todos os clientes cadastrados
+- 🟢/🔴 Abrir/Fechar Loja (bloqueia novos pedidos quando fechada)
+- ❌ Cancelar Último Pedido
 
-**Customer flow:** cart → PIX → photo comprovante → admin confirms → entregador notified
+**Entregador (@jRDG7):**
+- Recebe notificação com endereço e itens ao confirmar pedido
+- Botão "✅ Marcar como Entregue" em cada entrega
+- Painel do Sócio: estoque, caixa, relatório, pedidos do dia, cardápio
 
-**Entregador (@jRDG7):** delivery notifications only — zero access to admin features
-
-Commands still available: `/start`, `/relatorio [date]`, `/fechamento`, `/cancelar`, `/resetdia`, `/resetcompleto`, `/add`, `/remover`, `/saida`, `/rd`, `/bart`, `/banco`, `/fornecedor`
+**Cliente:**
+- 📋 Meu Pedido → status e endereço do último pedido
+- Notificado quando pagamento confirmado e quando entregue
 
 ## User preferences
 
-- Keep code in Python, not TypeScript
-- Portuguese language in bot messages
+- Manter código em Python
+- Mensagens em português
+- Sem dependências externas desnecessárias
 
 ## Gotchas
 
-- Only one bot instance should run at a time — two instances cause a 409 Conflict error from Telegram
-- Restart the "Telegram Bot" workflow after code changes
+- Apenas uma instância do bot por vez — dois processos = erro 409
+- Reiniciar o workflow "Telegram Bot" após qualquer mudança de código
+- `itens_pedido.produto` é o nome correto da coluna (não `produto_codigo`)
+- Alerta de estoque baixo disparado automaticamente após cada pedido confirmado
 
 ## Pointers
 
-- See the `workflows` skill for managing the bot workflow
+- Ver skill `workflows` para gerenciar o bot
+- Ver skill `deployment` para deploy 24/7

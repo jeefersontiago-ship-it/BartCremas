@@ -139,6 +139,21 @@ def init_db():
 
     c.execute("INSERT OR IGNORE INTO config VALUES ('saldo_banco', 0)")
     c.execute("INSERT OR IGNORE INTO config VALUES ('divida_fornecedor', 74890)")
+    c.execute("INSERT OR IGNORE INTO config VALUES ('loja_aberta', 1)")
+
+    c.execute('''CREATE TABLE IF NOT EXISTS clientes (
+                 chat_id INTEGER PRIMARY KEY,
+                 username TEXT,
+                 nome TEXT,
+                 data_registro TEXT)''')
+
+    # Migrações de colunas em pedidos
+    c.execute("PRAGMA table_info(pedidos)")
+    cols = [row[1] for row in c.fetchall()]
+    if "endereco" not in cols:
+        c.execute("ALTER TABLE pedidos ADD COLUMN endereco TEXT DEFAULT ''")
+    if "customer_chat_id" not in cols:
+        c.execute("ALTER TABLE pedidos ADD COLUMN customer_chat_id INTEGER DEFAULT 0")
 
     conn.commit()
     conn.close()
@@ -192,6 +207,48 @@ def set_config(chave, valor):
     c.execute("UPDATE config SET valor=? WHERE chave=?", (valor, chave))
     conn.commit()
     conn.close()
+
+def loja_esta_aberta() -> bool:
+    return bool(get_config("loja_aberta"))
+
+def registrar_cliente(chat_id: int, username: str, nome: str):
+    conn = get_db(); c = conn.cursor()
+    data = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    c.execute("INSERT OR REPLACE INTO clientes VALUES (?,?,?,?)",
+              (chat_id, username or "", nome or "", data))
+    conn.commit(); conn.close()
+
+async def check_low_stock(bot):
+    LIMITES = {"ICE": 50, "PAK": 30, "CRUMBLE": 20, "POD_I": 1, "POD_S": 1}
+    conn = get_db(); c = conn.cursor()
+    c.execute("SELECT codigo, nome, estoque FROM produtos WHERE codigo IN ('ICE','PAK','CRUMBLE','POD_I','POD_S')")
+    rows = c.fetchall(); conn.close()
+    alertas = []
+    for cod, nome, est in rows:
+        if cod in LIMITES and est <= LIMITES[cod]:
+            alertas.append(f"  {estoque_emoji(est)} {nome}: <b>{est:.1f}</b>")
+    if alertas and ADMIN_ID:
+        msg = "⚠️ <b>ALERTA — ESTOQUE BAIXO</b>\n━━━━━━━━━━━━━━\n\n" + "\n".join(alertas)
+        try:
+            await bot.send_message(chat_id=ADMIN_ID, text=msg, parse_mode="HTML")
+        except Exception as e:
+            logging.warning(f"Falha ao enviar alerta de estoque: {e}")
+
+def build_relatorio_periodo(data_ini: str, data_fim: str, titulo: str) -> str:
+    conn = get_db(); c = conn.cursor()
+    c.execute("SELECT pagamento, SUM(total) FROM pedidos WHERE data BETWEEN ? AND ? AND status='OK' GROUP BY pagamento",
+              (data_ini, data_fim + " 23:59"))
+    pagamentos = dict(c.fetchall())
+    c.execute("SELECT SUM(total), COUNT(*) FROM pedidos WHERE data BETWEEN ? AND ? AND status='OK'",
+              (data_ini, data_fim + " 23:59"))
+    row = c.fetchone(); conn.close()
+    total, qtd = (row[0] or 0), (row[1] or 0)
+    rel  = f"📊 <b>{titulo}</b>\n━━━━━━━━━━━━━━\n\n"
+    rel += f"🛒 Pedidos: <b>{qtd}</b>\n"
+    rel += f"💰 Total: <b>R$ {total:.2f}</b>\n"
+    rel += f"   📲 PIX: R$ {pagamentos.get('PIX', 0):.2f}\n"
+    rel += f"   💵 Dinheiro: R$ {pagamentos.get('DINHEIRO', 0):.2f}\n"
+    return rel
 
 def build_estoque_text():
     conn = get_db()
@@ -259,6 +316,7 @@ def build_relatorio_text(hoje):
     return rel
 
 def main_keyboard():
+    loja_btn = "🔴 Fechar Loja" if loja_esta_aberta() else "🟢 Abrir Loja"
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📋 Novo Pedido",        callback_data="novo_pedido"),
          InlineKeyboardButton("📦 Estoque",             callback_data="estoque")],
@@ -266,6 +324,8 @@ def main_keyboard():
          InlineKeyboardButton("📊 Relatório Hoje",      callback_data="relatorio")],
         [InlineKeyboardButton("🏪 Gestão de Estoque",  callback_data="admin_menu_estoque")],
         [InlineKeyboardButton("💸 Financeiro",          callback_data="admin_menu_financeiro")],
+        [InlineKeyboardButton("📢 Broadcast",          callback_data="admin_broadcast"),
+         InlineKeyboardButton(loja_btn,                callback_data="admin_toggle_loja")],
         [InlineKeyboardButton("❌ Cancelar Último Pedido", callback_data="admin_cancelar")],
     ])
 
@@ -284,7 +344,9 @@ def admin_financeiro_keyboard():
         [InlineKeyboardButton("💸 Saída de Caixa",     callback_data="admin_saida_input"),
          InlineKeyboardButton("🏦 Saldo Banco",        callback_data="admin_banco_input")],
         [InlineKeyboardButton("🏭 Dívida Fornecedor",  callback_data="admin_fornecedor_input")],
-        [InlineKeyboardButton("📅 Relatório por Data", callback_data="admin_relatorio_data")],
+        [InlineKeyboardButton("📅 Relatório por Data",    callback_data="admin_relatorio_data")],
+        [InlineKeyboardButton("📅 Relatório Semanal",   callback_data="relatorio_semanal"),
+         InlineKeyboardButton("📅 Relatório Mensal",    callback_data="relatorio_mensal")],
         [InlineKeyboardButton("🗑️ Reset Dia",          callback_data="resetdia_btn"),
          InlineKeyboardButton("🗑️ Reset Completo",     callback_data="admin_reset_completo")],
         [InlineKeyboardButton("← Voltar ao Menu",      callback_data="admin_menu_principal")],
@@ -294,6 +356,7 @@ def customer_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🛒  pedir agora",     callback_data="loja_iniciar")],
         [InlineKeyboardButton("📦  ver cardápio",    callback_data="loja_produtos")],
+        [InlineKeyboardButton("📋  meu pedido",      callback_data="loja_status")],
     ])
 
 def socio_keyboard():
@@ -366,6 +429,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=socio_keyboard()
         )
     else:
+        registrar_cliente(user.id, user.username or "", user.first_name or "")
         await update.message.reply_text(
             "🖤  <b>STORE</b>\n"
             "━━━━━━━━━━━━━━━━━━\n"
@@ -714,6 +778,19 @@ async def handle_comprovante(update: Update, context: ContextTypes.DEFAULT_TYPE)
     pedido = context.user_data.get("pedido_pendente")
     if not pedido:
         return
+    # Verificar expiração (20 minutos)
+    tempo_str = context.user_data.get("tempo_comprovante")
+    if tempo_str:
+        tempo = datetime.datetime.fromisoformat(tempo_str)
+        if (datetime.datetime.now() - tempo).total_seconds() > 1200:
+            context.user_data.clear()
+            await update.message.reply_text(
+                "⏱️ <b>Pedido expirado!</b>\n\n"
+                "Você demorou mais de 20 minutos para enviar o comprovante.\n"
+                "Use /start para fazer um novo pedido.",
+                parse_mode="HTML"
+            )
+            return
 
     customer_id = update.effective_chat.id
     pedidos_pendentes[customer_id] = pedido
@@ -1037,6 +1114,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass  # quantity display buttons — do nothing
 
     elif query.data == "loja_iniciar":
+        if not loja_esta_aberta():
+            await query.answer("🔴 Estamos fechados no momento! Voltamos em breve.", show_alert=True)
+            return
         context.user_data.clear()
         context.user_data["carrinho"] = {c: 0 for c in PRODUTOS_INFO}
         context.user_data["estado"]   = "cliente_carrinho"
@@ -1128,6 +1208,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "total":            total,
             "nome_cliente":     user.first_name or "Cliente",
             "customer_contact": f"@{user.username}" if user.username else f"ID:{user.id}",
+            "customer_chat_id": user.id,
+            "endereco":         "",
         }
         itens_str = "\n".join(
             f"  {PRODUTOS_INFO[p][0]}  ×{q}   R$ {q * PRODUTOS_INFO[p][1]:.0f}"
@@ -1136,6 +1218,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         taxa_str = f"\n  entrega: R$ {taxa:.0f}" if taxa > 0 else ""
         context.user_data["itens_str_cache"] = itens_str
         context.user_data["taxa_str_cache"]  = taxa_str
+        context.user_data["estado"] = "cliente_endereco"
         msg = (
             f"🖤  <b>PEDIDO FECHADO</b>\n"
             f"━━━━━━━━━━━━━━━━━━\n\n"
@@ -1143,14 +1226,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"━━━━━━━━━━━━━━━━━━\n"
             f"{taxa_str}\n"
             f"💸  <b>Total: R$ {total:.0f}</b>\n\n"
-            f"Como vai pagar?"
+            f"📍 <b>Qual o seu endereço de entrega?</b>\n"
+            f"<i>(rua, número, bairro)</i>"
         )
-        kb_pag = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📲 PIX",      callback_data="loja_pagar_pix"),
-             InlineKeyboardButton("💵 Dinheiro", callback_data="loja_pagar_dinheiro")],
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🏪 Vou retirar", callback_data="loja_retirar")],
             [InlineKeyboardButton("← voltar ao carrinho", callback_data="loja_voltar_carrinho")],
         ])
-        await query.edit_message_text(msg, parse_mode="HTML", reply_markup=kb_pag)
+        await query.edit_message_text(msg, parse_mode="HTML", reply_markup=kb)
 
     elif query.data == "loja_pagar_pix":
         pedido    = context.user_data.get("pedido_pendente")
@@ -1159,13 +1242,16 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         itens_str = context.user_data.get("itens_str_cache", "")
         taxa_str  = context.user_data.get("taxa_str_cache", "")
         context.user_data["estado"] = "cliente_comprovante"
+        context.user_data["tempo_comprovante"] = datetime.datetime.now().isoformat()
+        endereco  = pedido.get("endereco", "")
+        end_str   = f"\n📍 <b>Entrega em:</b> {endereco}" if endereco and endereco != "Retirada" else ("\n🏪 <b>Retirada</b>" if endereco == "Retirada" else "")
         msg = (
             f"🖤  <b>PEDIDO FECHADO</b>\n"
             f"━━━━━━━━━━━━━━━━━━\n\n"
             f"{itens_str}\n"
             f"━━━━━━━━━━━━━━━━━━\n"
             f"{taxa_str}\n"
-            f"💸  <b>Total: R$ {pedido['total']:.0f}</b>\n\n"
+            f"💸  <b>Total: R$ {pedido['total']:.0f}</b>{end_str}\n\n"
             f"⚡  <b>Pague via PIX e mande o comprovante aqui como foto 👇</b>"
         )
         kb_pix = InlineKeyboardMarkup([
@@ -1173,7 +1259,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("✖ cancelar pedido",    callback_data="loja_cancelar")],
         ])
         await query.edit_message_text(msg, parse_mode="HTML", reply_markup=kb_pix)
-        # Envia a chave PIX sozinha para facilitar cópia
         await context.bot.send_message(
             chat_id=query.message.chat_id,
             text=f"<code>{CHAVE_PIX}</code>",
@@ -1184,20 +1269,16 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pedido = context.user_data.get("pedido_pendente")
         if not pedido:
             await query.answer("sessão expirada, use /start", show_alert=True); return
-        itens_str = context.user_data.get("itens_str_cache", "")
-        taxa_str  = context.user_data.get("taxa_str_cache", "")
+        context.user_data["estado"] = "cliente_troco"
         msg = (
-            f"💵  <b>CONFIRMAR PEDIDO — DINHEIRO</b>\n"
+            f"💵 <b>PAGAMENTO EM DINHEIRO</b>\n"
             f"━━━━━━━━━━━━━━━━━━\n\n"
-            f"{itens_str}\n"
-            f"━━━━━━━━━━━━━━━━━━\n"
-            f"{taxa_str}\n"
-            f"💸  <b>Total: R$ {pedido['total']:.0f}</b>\n\n"
-            f"Pagamento em dinheiro na entrega.\n"
-            f"Confirma o pedido?"
+            f"💸 Total: <b>R$ {pedido['total']:.0f}</b>\n\n"
+            f"Com quanto vai pagar?\n"
+            f"<i>Digite o valor ou clique em «Valor exato»</i>"
         )
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ Confirmar pedido",   callback_data="loja_confirmar_dinheiro")],
+            [InlineKeyboardButton("💸 Pagar valor exato", callback_data="loja_troco_exato")],
             [InlineKeyboardButton("← Voltar",             callback_data="loja_confirmar")],
         ])
         await query.edit_message_text(msg, parse_mode="HTML", reply_markup=kb)
@@ -1217,22 +1298,29 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             (numero, pedido["nome_cliente"], pedido["total"], pedido["taxa"], "DINHEIRO", "Loja-Bot", data_now, "OK")
         )
         pedido_id = c.lastrowid
+        endereco  = pedido.get("endereco", "")
+        cid       = pedido.get("customer_chat_id", user.id)
+        troco     = context.user_data.get("troco", 0)
         for prod, qtd in pedido["itens"].items():
             if qtd > 0:
-                c.execute("INSERT INTO itens_pedido (pedido_id, produto_codigo, quantidade) VALUES (?,?,?)", (pedido_id, prod, qtd))
+                c.execute("INSERT INTO itens_pedido (pedido_id, produto, quantidade) VALUES (?,?,?)", (pedido_id, prod, qtd))
                 c.execute("UPDATE produtos SET estoque = estoque - ? WHERE codigo = ?", (qtd, prod))
         c.execute("INSERT INTO caixa (tipo, valor, descricao, data) VALUES ('entrada',?,?,?)",
                   (pedido["total"], f"Pedido #{numero} DINHEIRO", data_now))
+        c.execute("UPDATE pedidos SET endereco=?, customer_chat_id=? WHERE id=?", (endereco, cid, pedido_id))
         conn.commit(); conn.close()
+        await check_low_stock(context.bot)
         context.user_data.clear()
+        end_str  = f"\n📍 <b>Endereço:</b> {endereco}" if endereco and endereco != "Retirada" else ("\n🏪 <b>Retirada</b>" if endereco == "Retirada" else "")
+        troco_str = f"\n💸 Troco: R$ {troco:.0f}" if troco > 0 else ""
         await context.bot.send_message(
             chat_id=ADMIN_ID,
             text=(
                 f"💵 <b>NOVO PEDIDO — DINHEIRO</b>\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
-                f"👤 Cliente: {pedido['nome_cliente']} ({contato})\n\n"
+                f"👤 Cliente: {pedido['nome_cliente']} ({contato}){end_str}\n\n"
                 f"{itens_str}\n"
-                f"💰 Total: R$ {pedido['total']:.2f}  [paga na entrega]\n"
+                f"💰 Total: R$ {pedido['total']:.2f}{troco_str}  [paga na entrega]\n"
                 f"━━━━━━━━━━━━━━━━━━"
             ),
             parse_mode="HTML"
@@ -1244,11 +1332,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"📥 <b>PEDIDO — DINHEIRO</b>\n"
                     f"━━━━━━━━━━━━━━\n"
                     f"👤 Cliente: {pedido['nome_cliente']}\n"
-                    f"📱 Contato: {contato}\n\n"
+                    f"📱 Contato: {contato}{end_str}\n\n"
                     f"{itens_str}\n\n"
-                    f"💰 Total: R$ {pedido['total']:.2f}  [paga na entrega 💵]"
+                    f"💰 Total: R$ {pedido['total']:.2f}{troco_str}  [paga na entrega 💵]"
                 ),
-                parse_mode="HTML"
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("✅ Marcar como Entregue", callback_data=f"entregue_{cid}_{numero}")
+                ]])
             )
         except Exception as e:
             logging.warning(f"Não foi possível notificar entregador (dinheiro): {e}")
@@ -1258,6 +1349,137 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Em breve o entregador entrará em contato. 🛵",
             parse_mode="HTML"
         )
+
+    elif query.data == "loja_retirar":
+        pedido = context.user_data.get("pedido_pendente")
+        if not pedido:
+            await query.answer("sessão expirada, use /start", show_alert=True); return
+        pedido["endereco"] = "Retirada"
+        context.user_data["estado"] = None
+        msg = (
+            f"🏪 <b>Retirada na loja</b>\n\n"
+            f"💸 Total: <b>R$ {pedido['total']:.0f}</b>\n\n"
+            f"Como vai pagar?"
+        )
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📲 PIX",      callback_data="loja_pagar_pix"),
+             InlineKeyboardButton("💵 Dinheiro", callback_data="loja_pagar_dinheiro")],
+            [InlineKeyboardButton("← Voltar", callback_data="loja_confirmar")],
+        ])
+        await query.edit_message_text(msg, parse_mode="HTML", reply_markup=kb)
+
+    elif query.data == "loja_troco_exato":
+        pedido = context.user_data.get("pedido_pendente")
+        if not pedido:
+            await query.answer("sessão expirada, use /start", show_alert=True); return
+        context.user_data["troco"] = 0
+        context.user_data["estado"] = None
+        itens_str = context.user_data.get("itens_str_cache", "")
+        taxa_str  = context.user_data.get("taxa_str_cache", "")
+        endereco  = pedido.get("endereco", "")
+        end_str   = f"\n📍 {endereco}" if endereco and endereco != "Retirada" else ("\n🏪 Retirada" if endereco == "Retirada" else "")
+        msg = (
+            f"💵 <b>CONFIRMAR PEDIDO — DINHEIRO</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n\n"
+            f"{itens_str}\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"{taxa_str}\n"
+            f"💸 Total: <b>R$ {pedido['total']:.0f}</b>{end_str}\n\n"
+            f"Confirma o pedido em dinheiro?"
+        )
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Confirmar pedido", callback_data="loja_confirmar_dinheiro")],
+            [InlineKeyboardButton("← Voltar",           callback_data="loja_pagar_dinheiro")],
+        ])
+        await query.edit_message_text(msg, parse_mode="HTML", reply_markup=kb)
+
+    elif query.data == "loja_status":
+        cid = query.from_user.id
+        conn = get_db(); c = conn.cursor()
+        c.execute("SELECT numero, total, pagamento, status, data, endereco FROM pedidos WHERE customer_chat_id=? ORDER BY id DESC LIMIT 1", (cid,))
+        row = c.fetchone(); conn.close()
+        kb_vol = InlineKeyboardMarkup([[InlineKeyboardButton("← Voltar", callback_data="loja_menu")]])
+        if not row:
+            await query.edit_message_text("📋 Nenhum pedido encontrado.\n\nFaça seu primeiro pedido! 🛒", reply_markup=kb_vol)
+            return
+        numero, total, pag, status, data, endereco = row
+        pag_emoji    = "📲" if pag == "PIX" else "💵"
+        status_texto = "✅ Confirmado" if status == "OK" else ("❌ Cancelado" if status == "CANCELADO" else status)
+        hora = data[11:16] if data and len(data) > 10 else ""
+        end_str = f"\n📍 {endereco}" if endereco else ""
+        await query.edit_message_text(
+            f"📋 <b>Último Pedido</b>\n━━━━━━━━━━━━━━\n\n"
+            f"🔢 Pedido #{numero}\n"
+            f"📊 Status: {status_texto}\n"
+            f"💰 R$ {total:.0f}  {pag_emoji} {pag}\n"
+            f"🕐 {hora}{end_str}",
+            parse_mode="HTML", reply_markup=kb_vol
+        )
+
+    elif query.data.startswith("entregue_"):
+        # entregue_{customer_chat_id}_{numero}
+        partes     = query.data.split("_", 2)
+        cid_str    = partes[1]
+        num_pedido = partes[2] if len(partes) > 2 else "?"
+        try:
+            cid = int(cid_str)
+            await context.bot.send_message(
+                chat_id=cid,
+                text=(
+                    "✅ <b>Seu pedido foi entregue!</b>\n\n"
+                    "Obrigado pela preferência! 🖤\n"
+                    "/start para fazer outro pedido."
+                ),
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            logging.warning(f"Não foi possível notificar cliente sobre entrega: {e}")
+        if ADMIN_ID:
+            try:
+                await context.bot.send_message(
+                    chat_id=ADMIN_ID,
+                    text=f"✅ <b>Entrega confirmada!</b>\nPedido #{num_pedido} marcado como entregue pelo entregador.",
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+        await query.edit_message_reply_markup(reply_markup=None)
+        await query.answer(f"✅ Pedido #{num_pedido} marcado como entregue!", show_alert=False)
+
+    elif query.data in ("relatorio_semanal", "relatorio_mensal"):
+        if not is_admin(query.from_user.id):
+            await query.answer("❌ Acesso negado.", show_alert=True); return
+        hoje  = datetime.date.today()
+        if query.data == "relatorio_semanal":
+            inicio = hoje - datetime.timedelta(days=7)
+            titulo = "RELATÓRIO — ÚLTIMOS 7 DIAS"
+        else:
+            inicio = hoje.replace(day=1)
+            titulo = f"RELATÓRIO — {hoje.strftime('%B/%Y').upper()}"
+        rel = build_relatorio_periodo(str(inicio), str(hoje), titulo)
+        kb  = InlineKeyboardMarkup([[InlineKeyboardButton("← Financeiro", callback_data="admin_menu_financeiro")]])
+        await query.edit_message_text(rel, parse_mode="HTML", reply_markup=kb)
+
+    elif query.data == "admin_broadcast":
+        if not is_admin(query.from_user.id):
+            await query.answer("❌ Acesso negado.", show_alert=True); return
+        context.user_data["estado"] = "admin_broadcast"
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("← Cancelar", callback_data="admin_menu_principal")]])
+        await query.edit_message_text(
+            "📢 <b>BROADCAST</b>\n━━━━━━━━━━━━━━\n\n"
+            "Envie a mensagem que deseja mandar para <b>todos os clientes</b>.\n\n"
+            "<i>Pode usar texto, emojis, etc. Apenas texto por enquanto.</i>",
+            parse_mode="HTML", reply_markup=kb
+        )
+
+    elif query.data == "admin_toggle_loja":
+        if not is_admin(query.from_user.id):
+            await query.answer("❌ Acesso negado.", show_alert=True); return
+        aberta = loja_esta_aberta()
+        set_config("loja_aberta", 0 if aberta else 1)
+        status = "🔴 Loja FECHADA" if aberta else "🟢 Loja ABERTA"
+        await query.answer(f"{status}", show_alert=True)
+        await query.edit_message_reply_markup(reply_markup=main_keyboard())
 
     elif query.data == "loja_voltar_carrinho":
         carrinho = context.user_data.get("carrinho", {c: 0 for c in PRODUTOS_INFO})
@@ -1309,8 +1531,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data_now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
         numero   = datetime.datetime.now().strftime("%d%H%M")
         c.execute(
-            "INSERT INTO pedidos (numero, cliente, total, taxa, pagamento, responsavel, data, status) VALUES (?,?,?,?,?,?,?,?)",
-            (numero, pedido["nome_cliente"], pedido["total"], pedido["taxa"], "PIX", "Loja-Bot", data_now, "OK")
+            "INSERT INTO pedidos (numero, cliente, total, taxa, pagamento, responsavel, data, status, endereco, customer_chat_id) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (numero, pedido["nome_cliente"], pedido["total"], pedido["taxa"], "PIX", "Loja-Bot", data_now, "OK",
+             pedido.get("endereco", ""), pedido.get("customer_chat_id", customer_id))
         )
         pedido_id = c.lastrowid
         for prod, qtd in pedido["itens"].items():
@@ -1320,11 +1543,15 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.commit()
         conn.close()
         registrar_caixa("entrada", pedido["total"], f"Pedido #{numero} - {pedido['nome_cliente']}")
+        await check_low_stock(context.bot)
         # Notificar entregador
         itens_entrega = "\n".join(
             f"• {q} {PRODUTOS_INFO[p][2]} {PRODUTOS_INFO[p][0]}"
             for p, q in pedido["itens"].items() if q > 0
         )
+        endereco = pedido.get("endereco", "")
+        end_str  = f"\n📍 <b>Endereço:</b> {endereco}" if endereco and endereco != "Retirada" else ("\n🏪 <b>Retirada</b>" if endereco == "Retirada" else "")
+        cid      = pedido.get("customer_chat_id", customer_id)
         try:
             await context.bot.send_message(
                 chat_id=ENTREGADOR_USERNAME,
@@ -1332,12 +1559,15 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"🚚 <b>NOVA ENTREGA!</b>\n"
                     f"━━━━━━━━━━━━━━\n"
                     f"👤 <b>Cliente:</b> {pedido['nome_cliente']}\n"
-                    f"📱 <b>Contato:</b> {pedido['customer_contact']}\n\n"
+                    f"📱 <b>Contato:</b> {pedido['customer_contact']}"
+                    f"{end_str}\n\n"
                     f"{itens_entrega}\n\n"
-                    f"💰 Total: R$ {pedido['total']:.2f} (PIX ✅ confirmado)\n\n"
-                    f"⚡ Entre em contato com o cliente para combinar a entrega."
+                    f"💰 Total: R$ {pedido['total']:.2f} (PIX ✅ confirmado)"
                 ),
-                parse_mode="HTML"
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("✅ Marcar como Entregue", callback_data=f"entregue_{cid}_{numero}")
+                ]])
             )
         except Exception as e:
             logging.warning(f"Não foi possível notificar entregador: {e}")
@@ -1409,10 +1639,73 @@ async def processar_mensagem(update: Update, context: ContextTypes.DEFAULT_TYPE)
             )
         return
 
+    # --- Endereço de entrega (fluxo loja) ---
+    if estado == "cliente_endereco":
+        endereco = texto
+        pedido   = context.user_data.get("pedido_pendente")
+        if not pedido:
+            await update.message.reply_text("Sessão expirada. Use /start para recomeçar.")
+            return
+        pedido["endereco"] = endereco
+        context.user_data["estado"] = None
+        msg = (
+            f"📍 <b>Endereço salvo:</b> <i>{endereco}</i>\n\n"
+            f"💸 Total: <b>R$ {pedido['total']:.0f}</b>\n\n"
+            f"Como vai pagar?"
+        )
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📲 PIX",      callback_data="loja_pagar_pix"),
+             InlineKeyboardButton("💵 Dinheiro", callback_data="loja_pagar_dinheiro")],
+            [InlineKeyboardButton("← Voltar ao carrinho", callback_data="loja_voltar_carrinho")],
+        ])
+        await update.message.reply_text(msg, parse_mode="HTML", reply_markup=kb)
+        return
+
+    # --- Troco para dinheiro ---
+    if estado == "cliente_troco":
+        pedido = context.user_data.get("pedido_pendente")
+        if not pedido:
+            await update.message.reply_text("Sessão expirada. Use /start para recomeçar.")
+            return
+        try:
+            valor = float(texto.replace(",", ".").replace("R$", "").replace(" ", ""))
+            total = pedido.get("total", 0)
+            if valor < total:
+                await update.message.reply_text(
+                    f"❌ Valor insuficiente. O total é <b>R$ {total:.0f}</b>.\nDigite um valor maior.",
+                    parse_mode="HTML"
+                )
+                return
+            troco = valor - total
+            context.user_data["troco"]  = troco
+            context.user_data["estado"] = None
+            itens_str = context.user_data.get("itens_str_cache", "")
+            taxa_str  = context.user_data.get("taxa_str_cache", "")
+            endereco  = pedido.get("endereco", "")
+            end_str   = f"\n📍 {endereco}" if endereco and endereco != "Retirada" else ("\n🏪 Retirada" if endereco == "Retirada" else "")
+            troco_str = f"\n💸 Troco: <b>R$ {troco:.0f}</b>" if troco > 0 else ""
+            msg = (
+                f"💵 <b>CONFIRMAR PEDIDO — DINHEIRO</b>\n"
+                f"━━━━━━━━━━━━━━━━━━\n\n"
+                f"{itens_str}\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"{taxa_str}\n"
+                f"💸 Total: <b>R$ {total:.0f}</b>{troco_str}{end_str}\n\n"
+                f"Confirma o pedido?"
+            )
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ Confirmar pedido", callback_data="loja_confirmar_dinheiro")],
+                [InlineKeyboardButton("← Voltar",           callback_data="loja_pagar_dinheiro")],
+            ])
+            await update.message.reply_text(msg, parse_mode="HTML", reply_markup=kb)
+        except ValueError:
+            await update.message.reply_text("❌ Valor inválido. Ex: <code>100</code>", parse_mode="HTML")
+        return
+
     # ====================== ESTADOS ADMIN GUIADOS ======================
 
     ADMIN_ESTADOS = ("admin_add", "admin_rem", "admin_rd", "admin_bart",
-                     "admin_saida", "admin_banco", "admin_fornecedor", "admin_rel_data")
+                     "admin_saida", "admin_banco", "admin_fornecedor", "admin_rel_data", "admin_broadcast")
 
     if estado in ADMIN_ESTADOS:
         if not is_admin(update.effective_user.id):
@@ -1531,6 +1824,29 @@ async def processar_mensagem(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 await update.message.reply_text(rel, parse_mode="HTML", reply_markup=kb_menu)
             except Exception:
                 await update.message.reply_text("❌ Data inválida. Ex: <code>05/05</code>", parse_mode="HTML")
+
+        elif estado == "admin_broadcast":
+            conn = get_db(); c = conn.cursor()
+            c.execute("SELECT chat_id FROM clientes")
+            todos = [row[0] for row in c.fetchall()]; conn.close()
+            context.user_data["estado"] = None
+            enviados = 0; falhos = 0
+            for cid in todos:
+                try:
+                    await context.bot.send_message(
+                        chat_id=cid,
+                        text=f"📢 <b>Aviso da loja:</b>\n\n{texto}",
+                        parse_mode="HTML"
+                    )
+                    enviados += 1
+                except Exception:
+                    falhos += 1
+            await update.message.reply_text(
+                f"✅ Broadcast enviado!\n"
+                f"📨 Enviado: <b>{enviados}</b>\n"
+                f"❌ Falhou: <b>{falhos}</b>",
+                parse_mode="HTML", reply_markup=kb_menu
+            )
         return
 
     # --- Desconto rápido: "ICE 3" ou "I 3" (uma linha) ---
