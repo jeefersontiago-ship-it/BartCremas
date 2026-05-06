@@ -816,10 +816,82 @@ def admin_estoque_keyboard():
         [InlineKeyboardButton("← Voltar ao Menu",      callback_data="admin_menu_principal")],
     ])
 
+def build_retiradas_overview_text() -> str:
+    conn = get_db(); c = conn.cursor()
+    mes = datetime.date.today().strftime("%Y-%m")
+    linhas: list[str] = []
+    total_geral = 0.0
+    for socio in ["Bart", "RD"]:
+        c.execute("SELECT COALESCE(SUM(valor),0) FROM retiradas WHERE UPPER(socio)=?", (socio.upper(),))
+        total = c.fetchone()[0]
+        c.execute("SELECT COALESCE(SUM(valor),0) FROM retiradas WHERE UPPER(socio)=? AND data LIKE ?",
+                  (socio.upper(), f"{mes}%"))
+        mes_v = c.fetchone()[0]
+        c.execute("SELECT valor, data FROM retiradas WHERE UPPER(socio)=? ORDER BY id DESC LIMIT 1",
+                  (socio.upper(),))
+        ult = c.fetchone()
+        total_geral += total
+        ult_str = ""
+        if ult:
+            try:
+                dt = datetime.datetime.strptime(ult[1][:10], "%Y-%m-%d").strftime("%d/%m")
+            except Exception:
+                dt = ult[1][:10]
+            ult_str = f"\n   Última: {dt}  —  R$ {ult[0]:.0f}"
+        linhas.append(
+            f"👤 <b>{socio}</b>\n"
+            f"   Este mês: <b>R$ {mes_v:.0f}</b>  ·  Total: R$ {total:.0f}"
+            f"{ult_str}"
+        )
+    conn.close()
+    msg  = "💰 <b>RETIRADAS — SÓCIOS</b>\n"
+    msg += "━━━━━━━━━━━━━━━━━━━━\n\n"
+    msg += "\n\n".join(linhas)
+    msg += f"\n\n━━━━━━━━━━━━━━━━━━━━\n"
+    msg += f"📊 Total geral retirado: <b>R$ {total_geral:.0f}</b>"
+    return msg
+
+def build_retiradas_socio_text(socio: str) -> str:
+    conn = get_db(); c = conn.cursor()
+    mes   = datetime.date.today().strftime("%Y-%m")
+    ano   = datetime.date.today().strftime("%Y")
+    c.execute("SELECT valor, data FROM retiradas WHERE UPPER(socio)=? ORDER BY id DESC LIMIT 30",
+              (socio.upper(),))
+    rows = c.fetchall()
+    c.execute("SELECT COALESCE(SUM(valor),0) FROM retiradas WHERE UPPER(socio)=?", (socio.upper(),))
+    total = c.fetchone()[0]
+    c.execute("SELECT COALESCE(SUM(valor),0) FROM retiradas WHERE UPPER(socio)=? AND data LIKE ?",
+              (socio.upper(), f"{mes}%"))
+    mes_v = c.fetchone()[0]
+    c.execute("SELECT COALESCE(SUM(valor),0) FROM retiradas WHERE UPPER(socio)=? AND data LIKE ?",
+              (socio.upper(), f"{ano}%"))
+    ano_v = c.fetchone()[0]
+    conn.close()
+
+    msg  = f"👤 <b>RETIRADAS — {socio.upper()}</b>\n"
+    msg += "━━━━━━━━━━━━━━━━━━━━\n"
+    if rows:
+        linhas: list[str] = []
+        for valor, data_raw in rows:
+            try:
+                dt = datetime.datetime.strptime(data_raw[:10], "%Y-%m-%d").strftime("%d/%m")
+                hora = data_raw[11:16] if len(data_raw) > 10 else ""
+                hora_str = f"  {hora}" if hora else ""
+            except Exception:
+                dt = data_raw[:10]; hora_str = ""
+            linhas.append(f"  📅 {dt}{hora_str}  —  <b>R$ {valor:.0f}</b>")
+        msg += "\n" + "\n".join(linhas) + "\n"
+    else:
+        msg += "\n<i>Nenhuma retirada registrada.</i>\n"
+    msg += "━━━━━━━━━━━━━━━━━━━━\n"
+    msg += f"📅 Este mês: <b>R$ {mes_v:.0f}</b>\n"
+    msg += f"📆 Este ano:  <b>R$ {ano_v:.0f}</b>\n"
+    msg += f"📊 Total histórico: <b>R$ {total:.0f}</b>"
+    return msg
+
 def admin_financeiro_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("👤 Retirada RD",        callback_data="admin_rd_input"),
-         InlineKeyboardButton("👤 Retirada Bart",      callback_data="admin_bart_input")],
+        [InlineKeyboardButton("💰 Retiradas Bart & RD", callback_data="retiradas_menu")],
         [InlineKeyboardButton("💸 Saída de Caixa",     callback_data="admin_saida_input"),
          InlineKeyboardButton("🏦 Saldo Banco",        callback_data="admin_banco_input")],
         [InlineKeyboardButton("🏭 Dívida Fornecedor",  callback_data="admin_fornecedor_input")],
@@ -1635,24 +1707,59 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]]))
 
     # --- Inputs guiados ---
+    elif query.data == "retiradas_menu":
+        if not is_admin(query.from_user.id):
+            await query.answer("❌ Acesso negado.", show_alert=True); return
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("👤 Bart",  callback_data="retiradas_bart"),
+             InlineKeyboardButton("👤 RD",    callback_data="retiradas_rd")],
+            [InlineKeyboardButton("← Financeiro", callback_data="admin_menu_financeiro")],
+        ])
+        await query.edit_message_text(build_retiradas_overview_text(), parse_mode="HTML", reply_markup=kb)
+
+    elif query.data == "retiradas_bart":
+        if not is_admin(query.from_user.id):
+            await query.answer("❌ Acesso negado.", show_alert=True); return
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("➕ Nova Retirada Bart", callback_data="retiradas_bart_input")],
+            [InlineKeyboardButton("← Retiradas",           callback_data="retiradas_menu")],
+            [InlineKeyboardButton("← Menu",                callback_data="admin_menu_principal")],
+        ])
+        await query.edit_message_text(build_retiradas_socio_text("Bart"), parse_mode="HTML", reply_markup=kb)
+
+    elif query.data == "retiradas_rd":
+        if not is_admin(query.from_user.id):
+            await query.answer("❌ Acesso negado.", show_alert=True); return
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("➕ Nova Retirada RD", callback_data="retiradas_rd_input")],
+            [InlineKeyboardButton("← Retiradas",         callback_data="retiradas_menu")],
+            [InlineKeyboardButton("← Menu",              callback_data="admin_menu_principal")],
+        ])
+        await query.edit_message_text(build_retiradas_socio_text("RD"), parse_mode="HTML", reply_markup=kb)
+
     elif query.data in ("admin_add", "admin_rem", "admin_rd_input", "admin_bart_input",
+                        "retiradas_bart_input", "retiradas_rd_input",
                         "admin_saida_input", "admin_banco_input", "admin_fornecedor_input",
                         "admin_relatorio_data"):
         if not is_admin(query.from_user.id):
             await query.answer("❌ Acesso negado.", show_alert=True); return
+        # retiradas_bart_input / retiradas_rd_input are handled separately below
         prompts = {
-            "admin_add":             ("admin_add",        "➕ <b>Adicionar Estoque</b>\n\nDigite o produto e quantidade:\n<code>ICE 50</code>  ou  <code>PAK 20</code>"),
-            "admin_rem":             ("admin_rem",        "➖ <b>Remover Estoque</b>\n\nDigite o produto e quantidade:\n<code>ICE 10</code>  ou  <code>PAK 5</code>"),
-            "admin_rd_input":        ("admin_rd",         "👤 <b>Retirada RD</b>\n\nDigite o valor:\n<code>500</code>"),
-            "admin_bart_input":      ("admin_bart",       "👤 <b>Retirada Bart</b>\n\nDigite o valor:\n<code>500</code>"),
-            "admin_saida_input":     ("admin_saida",      "💸 <b>Saída de Caixa</b>\n\nDigite o valor e descrição:\n<code>50 Gasolina</code>"),
-            "admin_banco_input":     ("admin_banco",      "🏦 <b>Saldo Banco</b>\n\nDigite o novo saldo:\n<code>3400</code>"),
-            "admin_fornecedor_input":("admin_fornecedor", "🏭 <b>Dívida Fornecedor</b>\n\nDigite o valor da dívida:\n<code>74890</code>"),
-            "admin_relatorio_data":  ("admin_rel_data",   "📅 <b>Relatório por Data</b>\n\nDigite a data:\n<code>05/05</code>  ou  <code>05/05/2025</code>"),
+            "admin_add":             ("admin_add",        "➕ <b>Adicionar Estoque</b>\n\nDigite o produto e quantidade:\n<code>ICE 50</code>  ou  <code>PAK 20</code>", "admin_menu_principal"),
+            "admin_rem":             ("admin_rem",        "➖ <b>Remover Estoque</b>\n\nDigite o produto e quantidade:\n<code>ICE 10</code>  ou  <code>PAK 5</code>",  "admin_menu_principal"),
+            "admin_rd_input":        ("admin_rd",         "👤 <b>Retirada RD</b>\n\nDigite o valor:\n<code>500</code>",                                                "retiradas_rd"),
+            "admin_bart_input":      ("admin_bart",       "👤 <b>Retirada Bart</b>\n\nDigite o valor:\n<code>500</code>",                                              "retiradas_bart"),
+            "retiradas_rd_input":    ("admin_rd",         "👤 <b>Retirada RD</b>\n\nDigite o valor:\n<code>500</code>",                                                "retiradas_rd"),
+            "retiradas_bart_input":  ("admin_bart",       "👤 <b>Retirada Bart</b>\n\nDigite o valor:\n<code>500</code>",                                              "retiradas_bart"),
+            "admin_saida_input":     ("admin_saida",      "💸 <b>Saída de Caixa</b>\n\nDigite o valor e descrição:\n<code>50 Gasolina</code>",                        "admin_menu_financeiro"),
+            "admin_banco_input":     ("admin_banco",      "🏦 <b>Saldo Banco</b>\n\nDigite o novo saldo:\n<code>3400</code>",                                          "admin_menu_financeiro"),
+            "admin_fornecedor_input":("admin_fornecedor", "🏭 <b>Dívida Fornecedor</b>\n\nDigite o valor da dívida:\n<code>74890</code>",                              "admin_menu_financeiro"),
+            "admin_relatorio_data":  ("admin_rel_data",   "📅 <b>Relatório por Data</b>\n\nDigite a data:\n<code>05/05</code>  ou  <code>05/05/2025</code>",           "admin_menu_financeiro"),
         }
-        estado, prompt = prompts[query.data]
+        estado, prompt, cancel_cb = prompts[query.data]
         context.user_data["estado"] = estado
-        kb_cancel = InlineKeyboardMarkup([[InlineKeyboardButton("✖ Cancelar", callback_data="admin_menu_principal")]])
+        context.user_data["estado_cancel_cb"] = cancel_cb
+        kb_cancel = InlineKeyboardMarkup([[InlineKeyboardButton("✖ Cancelar", callback_data=cancel_cb)]])
         await query.edit_message_text(prompt, parse_mode="HTML", reply_markup=kb_cancel)
 
     elif query.data == "resetdia_btn":
@@ -2550,12 +2657,16 @@ async def processar_mensagem(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 valor = float(texto.replace(",", ".").replace("R$", "").strip())
                 registrar_caixa("saida", valor, "Retirada RD")
                 conn = get_db(); c = conn.cursor()
-                c.execute("INSERT INTO retiradas (responsavel, valor, data) VALUES (?,?,?)",
+                c.execute("INSERT INTO retiradas (socio, valor, data) VALUES (?,?,?)",
                           ("RD", valor, datetime.datetime.now().strftime("%Y-%m-%d %H:%M")))
                 conn.commit(); conn.close()
                 context.user_data["estado"] = None
+                kb_rd = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("📊 Ver Retiradas RD", callback_data="retiradas_rd")],
+                    [InlineKeyboardButton("← Menu", callback_data="admin_menu_principal")],
+                ])
                 await update.message.reply_text(
-                    f"✅ <b>Retirada RD</b> registrada: R$ {valor:.2f}", parse_mode="HTML", reply_markup=kb_menu)
+                    f"✅ <b>Retirada RD</b> registrada: R$ {valor:.0f}", parse_mode="HTML", reply_markup=kb_rd)
             except ValueError:
                 await update.message.reply_text("❌ Valor inválido. Ex: <code>500</code>", parse_mode="HTML")
 
@@ -2564,12 +2675,16 @@ async def processar_mensagem(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 valor = float(texto.replace(",", ".").replace("R$", "").strip())
                 registrar_caixa("saida", valor, "Retirada Bart")
                 conn = get_db(); c = conn.cursor()
-                c.execute("INSERT INTO retiradas (responsavel, valor, data) VALUES (?,?,?)",
+                c.execute("INSERT INTO retiradas (socio, valor, data) VALUES (?,?,?)",
                           ("Bart", valor, datetime.datetime.now().strftime("%Y-%m-%d %H:%M")))
                 conn.commit(); conn.close()
                 context.user_data["estado"] = None
+                kb_bart = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("📊 Ver Retiradas Bart", callback_data="retiradas_bart")],
+                    [InlineKeyboardButton("← Menu", callback_data="admin_menu_principal")],
+                ])
                 await update.message.reply_text(
-                    f"✅ <b>Retirada Bart</b> registrada: R$ {valor:.2f}", parse_mode="HTML", reply_markup=kb_menu)
+                    f"✅ <b>Retirada Bart</b> registrada: R$ {valor:.0f}", parse_mode="HTML", reply_markup=kb_bart)
             except ValueError:
                 await update.message.reply_text("❌ Valor inválido. Ex: <code>500</code>", parse_mode="HTML")
 
