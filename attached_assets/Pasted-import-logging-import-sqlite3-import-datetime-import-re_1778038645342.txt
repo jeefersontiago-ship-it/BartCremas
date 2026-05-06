@@ -1,0 +1,149 @@
+import logging
+import sqlite3
+import datetime
+import re
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
+
+logging.basicConfig(level=logging.INFO)
+
+TOKEN = os.getenv("TOKEN")
+
+ADMIN_ID = 0  # ← COLOQUE SEU ID AQUI
+
+def is_admin(user_id):
+    return user_id == ADMIN_ID
+
+# ====================== BANCO ======================
+def init_db():
+    conn = sqlite3.connect('controle.db')
+    c = conn.cursor()
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS produtos (
+                 codigo TEXT PRIMARY KEY, nome TEXT, estoque REAL, preco REAL)''')
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS pedidos (
+                 id INTEGER PRIMARY KEY, numero TEXT, cliente TEXT, total REAL,
+                 pagamento TEXT, responsavel TEXT, data TEXT)''')
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS itens_pedido (
+                 pedido_id INTEGER, produto TEXT, quantidade REAL)''')
+    
+    produtos = [
+        ("ICE", "🍦 Ice o Lator", 375.0, 140.0),
+        ("PAK", "🥐 Pak", 170.0, 60.0),
+        ("CRUMBLE", "🍪 Crumble", 83.0, 180.0),
+        ("POD", "🪦 Pod THC", 8.0, 450.0)
+    ]
+    c.executemany("INSERT OR IGNORE INTO produtos VALUES (?,?,?,?)", produtos)
+    conn.commit()
+    conn.close()
+
+init_db()
+def get_db(): return sqlite3.connect('controle.db')
+
+# ====================== MENU BONITO ======================
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("📋 Novo Pedido", callback_data="novo_pedido")],
+        [InlineKeyboardButton("📦 Estoque Atual", callback_data="estoque")],
+        [InlineKeyboardButton("📊 Relatório do Dia", callback_data="relatorio")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        "🍪 <b>Cookie Control Pro</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "Sistema profissional de controle\n"
+        "Escolha uma opção abaixo 👇",
+        parse_mode='HTML', reply_markup=reply_markup
+    )
+
+# ====================== RELATÓRIO MELHORADO (SURREAL) ======================
+async def relatorio_dia(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id if hasattr(update, 'effective_user') else update.callback_query.from_user.id):
+        await update.callback_query.edit_message_text("❌ Acesso negado.")
+        return
+
+    data_hoje = datetime.datetime.now().strftime("%Y-%m-%d")
+    conn = get_db()
+    c = conn.cursor()
+    
+    c.execute("SELECT SUM(total), COUNT(*) FROM pedidos WHERE data LIKE ?", (data_hoje+'%',))
+    total_vendido, qtd_pedidos = c.fetchone() or (0, 0)
+    
+    c.execute("SELECT pagamento, SUM(total) FROM pedidos WHERE data LIKE ? GROUP BY pagamento", (data_hoje+'%',))
+    pagamentos = dict(c.fetchall())
+    
+    c.execute("""SELECT i.produto, SUM(i.quantidade) 
+                 FROM itens_pedido i 
+                 JOIN pedidos p ON i.pedido_id = p.id 
+                 WHERE p.data LIKE ? GROUP BY i.produto""", (data_hoje+'%',))
+    saidas = dict(c.fetchall())
+    
+    c.execute("SELECT codigo, nome, estoque FROM produtos")
+    estoque_atual = c.fetchall()
+    
+    conn.close()
+
+    # Relatório Visual Premium
+    rel = "📊 <b>FECHAMENTO DO DIA</b>\n"
+    rel += f"📅 {datetime.datetime.now().strftime('%d/%m/%Y')}\n"
+    rel += "━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    
+    rel += f"📦 <b>Pedidos Realizados:</b> {qtd_pedidos}\n"
+    rel += f"💰 <b>Total Vendido:</b> R$ {total_vendido:.2f}\n\n"
+    
+    rel += "💳 <b>Forma de Pagamento:</b>\n"
+    rel += f"   📲 PIX → R$ {pagamentos.get('PIX', 0):.2f}\n"
+    rel += f"   💵 Dinheiro → R$ {pagamentos.get('DINHEIRO', 0):.2f}\n\n"
+    
+    rel += "📦 <b>Saídas do Dia:</b>\n"
+    for cod in ["ICE", "PAK", "CRUMBLE", "POD"]:
+        qtd = saidas.get(cod, 0)
+        rel += f"   • {cod}: <b>{qtd:.1f}g</b>\n"
+    
+    rel += "\n📦 <b>Estoque Restante:</b>\n"
+    for cod, nome, qtd in estoque_atual:
+        rel += f"   {nome}: <b>{qtd:.1f}g</b>\n"
+    
+    rel += "\n━━━━━━━━━━━━━━━━━━━━━━━\n"
+    rel += "✅ Relatório gerado automaticamente"
+
+    if hasattr(update, 'callback_query'):
+        await update.callback_query.edit_message_text(rel, parse_mode='HTML')
+    else:
+        await update.message.reply_text(rel, parse_mode='HTML')
+
+# ====================== OUTROS BOTÕES ======================
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    if query.data == "estoque":
+        await ver_estoque(query, context)
+    elif query.data == "relatorio":
+        await relatorio_dia(update, context)
+    elif query.data == "novo_pedido":
+        await query.edit_message_text("👤 Qual o nome do cliente?")
+
+async def ver_estoque(query, context):
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("SELECT nome, estoque FROM produtos")
+    rows = c.fetchall()
+    conn.close()
+    
+    texto = "📦 <b>ESTOQUE ATUAL</b>\n━━━━━━━━━━━━━━\n\n"
+    for nome, qtd in rows:
+        texto += f"{nome}: <b>{qtd:.1f}g</b>\n"
+    await query.edit_message_text(texto, parse_mode='HTML')
+
+# ====================== INICIAR ======================
+app = ApplicationBuilder().token(TOKEN).build()
+
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CallbackQueryHandler(button_callback))
+
+print("🚀 Cookie Control Pro - Versão Surreal Ativada!")
+app.run_polling()
