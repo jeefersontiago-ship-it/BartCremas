@@ -269,6 +269,43 @@ async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         await update.message.reply_text("⚠️ Uso: /add ICE 50")
 
+async def cmd_remover(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Apenas o administrador pode remover estoque.")
+        return
+    try:
+        args = context.args
+        if len(args) < 2:
+            await update.message.reply_text("⚠️ Uso: /remover ICE 10")
+            return
+        cod = ALIAS.get(args[0].upper(), args[0].upper())
+        qtd = float(args[1].replace(",", "."))
+        if cod not in CODIGOS:
+            await update.message.reply_text(f"❌ Código inválido. Use: {', '.join(CODIGOS)}")
+            return
+        if qtd <= 0:
+            await update.message.reply_text("❌ A quantidade deve ser maior que zero.")
+            return
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("SELECT estoque, nome FROM produtos WHERE codigo = ?", (cod,))
+        row = c.fetchone()
+        atual, nome = row
+        if qtd > atual:
+            conn.close()
+            await update.message.reply_text(
+                f"❌ Estoque insuficiente.\n{nome} tem apenas {atual:.1f} em estoque.")
+            return
+        c.execute("UPDATE produtos SET estoque = estoque - ? WHERE codigo = ?", (qtd, cod))
+        c.execute("SELECT estoque FROM produtos WHERE codigo = ?", (cod,))
+        novo = c.fetchone()[0]
+        conn.commit()
+        conn.close()
+        await update.message.reply_text(
+            f"✅ {nome} −{qtd:.1f}\n📦 Agora: {novo:.1f}", parse_mode="HTML")
+    except ValueError:
+        await update.message.reply_text("⚠️ Uso: /remover ICE 10")
+
 async def cmd_saida(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         args = context.args
@@ -723,6 +760,7 @@ def main():
     app.add_handler(CommandHandler("fornecedor", cmd_fornecedor))
     app.add_handler(CommandHandler("relatorio",  cmd_relatorio))
     app.add_handler(CommandHandler("fechamento", cmd_relatorio))
+    app.add_handler(CommandHandler("remover",       cmd_remover))
     app.add_handler(CommandHandler("cancelar",      cmd_cancelar))
     app.add_handler(CommandHandler("resetdia",      reset_dia))
     app.add_handler(CommandHandler("resetcompleto", reset_completo))
