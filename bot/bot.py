@@ -181,6 +181,8 @@ def build_estoque_text():
     conn.close()
     texto = "📦 <b>ESTOQUE ATUAL</b>\n━━━━━━━━━━━━━━\n\n"
     for cod, nome, qtd, preco in rows:
+        if cod not in PRODUTOS_INFO:
+            continue
         texto += f"{estoque_emoji(qtd)} {nome}: <b>{qtd:.1f}</b> | R$ {preco:.2f}/un\n"
     return texto
 
@@ -916,6 +918,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.close()
         msg = "📦  <b>CARDÁPIO</b>\n━━━━━━━━━━━━━━━━━━\n\n"
         for cod, nome, preco, estoque in rows:
+            if cod not in PRODUTOS_INFO:
+                continue
             unidade = PRODUTOS_INFO[cod][2]
             status  = "🟢" if estoque > 0 else "🔴 esgotado"
             msg += f"{status}  {nome}\n    R$ {preco:.0f}/{unidade}\n\n"
