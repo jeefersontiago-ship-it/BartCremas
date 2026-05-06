@@ -14,8 +14,9 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
-DB_PATH  = os.path.join(os.path.dirname(__file__), "controle.db")
+ADMIN_ID  = int(os.getenv("ADMIN_ID", "0"))
+CHAVE_PIX = os.getenv("CHAVE_PIX", "")
+DB_PATH   = os.path.join(os.path.dirname(__file__), "controle.db")
 
 def is_admin(user_id):
     return ADMIN_ID != 0 and user_id == ADMIN_ID
@@ -82,18 +83,16 @@ def init_db():
                      SELECT entrega_id, produto, quantidade FROM itens_entrega''')
         c.execute("DROP TABLE itens_entrega")
 
-    # Insert or update products (with emojis)
     produtos = [
-        ("ICE",    "🍦 Ice o Lator", 375.0, 140.0),
-        ("PAK",    "🥐 Pak",          170.0,  60.0),
-        ("CRUMBLE","🍪 Crumble",       83.0, 180.0),
-        ("POD",    "🪦 Pod THC",        8.0, 450.0),
+        ("ICE",     "🍦 Ice o Lator", 375.0, 140.0),
+        ("PAK",     "🥐 Pak",          170.0,  60.0),
+        ("CRUMBLE", "🍪 Crumble",       83.0, 180.0),
+        ("POD",     "🪦 Pod THC",        8.0, 450.0),
     ]
     c.executemany("INSERT OR IGNORE INTO produtos VALUES (?,?,?,?)", produtos)
-    # Update names so existing rows get the emoji version
     for cod, nome, _, _ in produtos:
         c.execute("UPDATE produtos SET nome=? WHERE codigo=? AND nome NOT LIKE ?",
-                  (nome, cod, f"%{nome[-6:]}%"))
+                  (nome, cod, f"%{nome[-5:]}%"))
 
     c.execute("INSERT OR IGNORE INTO config VALUES ('saldo_banco', 0)")
     c.execute("INSERT OR IGNORE INTO config VALUES ('divida_fornecedor', 74890)")
@@ -145,8 +144,7 @@ def build_estoque_text():
     conn.close()
     texto = "📦 <b>ESTOQUE ATUAL</b>\n━━━━━━━━━━━━━━\n\n"
     for cod, nome, qtd, preco in rows:
-        emoji = estoque_emoji(qtd)
-        texto += f"{emoji} {nome}: <b>{qtd:.1f}</b> | R$ {preco:.2f}/un\n"
+        texto += f"{estoque_emoji(qtd)} {nome}: <b>{qtd:.1f}</b> | R$ {preco:.2f}/un\n"
     return texto
 
 def build_relatorio_text(hoje):
@@ -176,7 +174,6 @@ def build_relatorio_text(hoje):
 
     saldo_banco = get_config("saldo_banco")
     divida      = get_config("divida_fornecedor")
-
     conn.close()
 
     rel  = "📊 <b>FECHAMENTO DO DIA</b>\n"
@@ -204,15 +201,16 @@ def build_relatorio_text(hoje):
 
 def main_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📋 Novo Pedido",    callback_data="novo_pedido")],
-        [InlineKeyboardButton("📦 Estoque Atual",  callback_data="estoque")],
-        [InlineKeyboardButton("💰 Caixa do Dia",   callback_data="caixa")],
-        [InlineKeyboardButton("📊 Relatório do Dia", callback_data="relatorio")],
+        [InlineKeyboardButton("📋 Novo Pedido",      callback_data="novo_pedido")],
+        [InlineKeyboardButton("📦 Ver Estoque",       callback_data="estoque")],
+        [InlineKeyboardButton("💰 Caixa do Dia",      callback_data="caixa")],
+        [InlineKeyboardButton("📊 Relatório do Dia",  callback_data="relatorio")],
     ])
 
 # ====================== COMANDOS ======================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
     await update.message.reply_text(
         "🍪 <b>Cookie Control Pro</b>\n"
         "━━━━━━━━━━━━━━━━━━\n"
@@ -237,8 +235,7 @@ async def cmd_caixa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.close()
     msg = "💰 <b>CAIXA DO DIA</b>\n━━━━━━━━━━━━━━\n\n"
     for tipo, total in rows:
-        label = "Entradas" if tipo == "entrada" else "Saídas"
-        msg += f"{label}: R$ {total:.2f}\n"
+        msg += f"{'Entradas' if tipo == 'entrada' else 'Saídas'}: R$ {total:.2f}\n"
     msg += f"\n<b>Saldo: R$ {saldo:.2f}</b>"
     await update.message.reply_text(msg, parse_mode="HTML")
 
@@ -309,9 +306,8 @@ async def cmd_banco(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Apenas o administrador.")
         return
     try:
-        valor = float(context.args[0].replace(",", "."))
-        set_config("saldo_banco", valor)
-        await update.message.reply_text(f"✅ Saldo Banco atualizado: R$ {valor:.2f}")
+        set_config("saldo_banco", float(context.args[0].replace(",", ".")))
+        await update.message.reply_text(f"✅ Saldo Banco atualizado: R$ {get_config('saldo_banco'):.2f}")
     except (ValueError, IndexError):
         await update.message.reply_text("Uso: /banco 12500")
 
@@ -320,11 +316,102 @@ async def cmd_fornecedor(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Apenas o administrador.")
         return
     try:
-        valor = float(context.args[0].replace(",", "."))
-        set_config("divida_fornecedor", valor)
-        await update.message.reply_text(f"✅ Dívida Fornecedor atualizada: R$ {valor:.2f}")
+        set_config("divida_fornecedor", float(context.args[0].replace(",", ".")))
+        await update.message.reply_text(f"✅ Dívida atualizada: R$ {get_config('divida_fornecedor'):.2f}")
     except (ValueError, IndexError):
         await update.message.reply_text("Uso: /fornecedor 74890")
+
+# ====================== FLUXO GUIADO ======================
+
+async def calcular_pedido(update: Update, context: ContextTypes.DEFAULT_TYPE, texto: str):
+    conn = get_db()
+    c = conn.cursor()
+    itens    = {}
+    subtotal = 0.0
+
+    for line in texto.upper().split("\n"):
+        match = re.search(r'(\d+(?:[.,]\d+)?)\s*(ICE|PAK|CRUMBLE|POD)', line)
+        if match:
+            qtd  = float(match.group(1).replace(",", "."))
+            prod = match.group(2)
+            c.execute("SELECT preco_venda FROM produtos WHERE codigo=?", (prod,))
+            row = c.fetchone()
+            if row:
+                itens[prod] = itens.get(prod, 0) + qtd
+                subtotal   += qtd * row[0]
+
+    conn.close()
+
+    if not itens:
+        await update.message.reply_text(
+            "⚠️ Nenhum item reconhecido.\nFormato: <code>5 PAK\n2 ICE</code>",
+            parse_mode="HTML")
+        return
+
+    taxa       = 10.0 if subtotal < 500 else 0.0
+    total      = subtotal + taxa
+
+    context.user_data["itens"]    = itens
+    context.user_data["subtotal"] = subtotal
+    context.user_data["taxa"]     = taxa
+    context.user_data["total"]    = total
+    context.user_data["estado"]   = "confirmar"
+
+    msg  = "📋 <b>RESUMO DO PEDIDO</b>\n\n"
+    msg += f"👤 Cliente: <b>{context.user_data['cliente']}</b>\n\n"
+    for p, q in itens.items():
+        msg += f"   • {q:.1f} × {p}\n"
+    msg += f"\n💰 Subtotal: R$ {subtotal:.2f}"
+    if taxa > 0:
+        msg += f"\n📌 Taxa de entrega: R$ {taxa:.2f}"
+    msg += f"\n\n💎 <b>Total: R$ {total:.2f}</b>\n\n"
+    msg += "Responda <b>Sim</b> para confirmar ou <b>Não</b> para cancelar."
+    await update.message.reply_text(msg, parse_mode="HTML")
+
+async def salvar_pedido_guiado(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    conn   = get_db()
+    c      = conn.cursor()
+    data   = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    numero = datetime.datetime.now().strftime("%d%H%M")
+    cliente = context.user_data["cliente"]
+    total   = context.user_data["total"]
+    taxa    = context.user_data["taxa"]
+    itens   = context.user_data["itens"]
+
+    c.execute(
+        "INSERT INTO pedidos (numero, cliente, total, taxa, pagamento, responsavel, data, status) VALUES (?,?,?,?,?,?,?,?)",
+        (numero, cliente, total, taxa, "PIX", "Bot", data, "OK"))
+    pedido_id = c.lastrowid
+    for prod, qtd in itens.items():
+        c.execute("INSERT INTO itens_pedido VALUES (?,?,?)", (pedido_id, prod, qtd))
+        c.execute("UPDATE produtos SET estoque = estoque - ? WHERE codigo = ?", (qtd, prod))
+    conn.commit()
+    conn.close()
+
+    registrar_caixa("entrada", total, f"Pedido #{numero} - {cliente}")
+
+    # Mensagem pronta para copiar e enviar ao cliente
+    cliente_msg  = f"✅ <b>Pedido Confirmado!</b>\n\n"
+    cliente_msg += f"Olá <b>{cliente}</b>!\n\n"
+    cliente_msg += "Seu pedido foi registrado:\n\n"
+    for p, q in itens.items():
+        cliente_msg += f"   • {q:.1f} × {p}\n"
+    if taxa > 0:
+        cliente_msg += f"\n📌 Taxa de entrega: R$ {taxa:.2f}"
+    cliente_msg += f"\n💎 <b>Total: R$ {total:.2f}</b>\n\n"
+    if CHAVE_PIX:
+        cliente_msg += f"🔑 <b>Chave PIX:</b> <code>{CHAVE_PIX}</code>\n"
+        cliente_msg += f"💵 Valor exato: <code>R$ {total:.2f}</code>\n\n"
+    cliente_msg += "Por favor, envie o comprovante após o pagamento. 🙏"
+
+    await update.message.reply_text(
+        f"✅ <b>Pedido #{numero} salvo!</b>\n\n"
+        "📄 <b>Mensagem pronta para o cliente:</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        + cliente_msg,
+        parse_mode="HTML"
+    )
+    context.user_data.clear()
 
 # ====================== CALLBACK BUTTONS ======================
 
@@ -332,7 +419,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    if query.data == "estoque":
+    if query.data == "novo_pedido":
+        context.user_data.clear()
+        context.user_data["estado"] = "esperando_cliente"
+        await query.edit_message_text("👤 Digite o nome do cliente:")
+
+    elif query.data == "estoque":
         await query.edit_message_text(build_estoque_text(), parse_mode="HTML")
 
     elif query.data == "caixa":
@@ -347,8 +439,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.close()
         msg = "💰 <b>CAIXA DO DIA</b>\n━━━━━━━━━━━━━━\n\n"
         for tipo, total in rows:
-            label = "Entradas" if tipo == "entrada" else "Saídas"
-            msg += f"{label}: R$ {total:.2f}\n"
+            msg += f"{'Entradas' if tipo == 'entrada' else 'Saídas'}: R$ {total:.2f}\n"
         msg += f"\n<b>Saldo: R$ {saldo:.2f}</b>"
         await query.edit_message_text(msg, parse_mode="HTML")
 
@@ -359,27 +450,40 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         hoje = datetime.datetime.now().strftime("%Y-%m-%d")
         await query.edit_message_text(build_relatorio_text(hoje), parse_mode="HTML")
 
-    elif query.data == "novo_pedido":
-        await query.edit_message_text(
-            "📋 <b>Novo Pedido</b>\n\n"
-            "Envie o pedido neste formato:\n\n"
-            "<code>pedido 01\n"
-            "Nome do Cliente\n"
-            "5G - PAK\n"
-            "1G - ICE\n"
-            "Total: R$ 440\n"
-            "Dinheiro\n"
-            "Responsavel: RD</code>",
-            parse_mode="HTML"
-        )
-
 # ====================== MESSAGE HANDLER ======================
 
 async def processar_mensagem(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    texto = update.message.text.strip()
-    lines = [line.strip() for line in texto.split("\n") if line.strip()]
+    texto  = update.message.text.strip()
+    estado = context.user_data.get("estado")
+
+    # --- Fluxo guiado (Novo Pedido via botão) ---
+    if estado == "esperando_cliente":
+        context.user_data["cliente"] = texto
+        context.user_data["estado"]  = "esperando_itens"
+        await update.message.reply_text(
+            "🛒 Envie os itens (um por linha):\n\n"
+            "<code>5 PAK\n2 ICE\n1 POD</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    if estado == "esperando_itens":
+        await calcular_pedido(update, context, texto)
+        return
+
+    if estado == "confirmar":
+        if texto.lower() in ("sim", "ok", "s", "confirmar", "yes"):
+            await salvar_pedido_guiado(update, context)
+        else:
+            context.user_data.clear()
+            await update.message.reply_text(
+                "❌ Pedido cancelado.\n\n"
+                "Use /start para voltar ao menu.",
+            )
+        return
 
     # --- Desconto rápido: "ICE 3" ou "I 3" (uma linha) ---
+    lines = [l.strip() for l in texto.split("\n") if l.strip()]
     if len(lines) == 1:
         partes = texto.upper().split()
         if len(partes) == 2:
@@ -407,43 +511,37 @@ async def processar_mensagem(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     pass
         return
 
-    # --- Parser de pedido completo (requer "pedido" ou "total") ---
+    # --- Parser de pedido colado (requer "pedido" ou "total") ---
     if not re.search(r'pedido|total', texto, re.IGNORECASE):
         return
 
     try:
         numero_match = re.search(r'pedido\s*(\d+)', lines[0], re.IGNORECASE)
-        numero = numero_match.group(1) if numero_match else datetime.datetime.now().strftime("%d%H%M")
-
-        cliente    = lines[1] if len(lines) > 1 else "Desconhecido"
-        itens      = {}
-        total      = 0.0
-        taxa       = 0.0
-        pagamento  = "PIX"
+        numero      = numero_match.group(1) if numero_match else datetime.datetime.now().strftime("%d%H%M")
+        cliente     = lines[1] if len(lines) > 1 else "Desconhecido"
+        itens       = {}
+        total       = 0.0
+        taxa        = 0.0
+        pagamento   = "PIX"
         responsavel = "Não informado"
 
         for line in lines:
             line_u = line.upper()
-
             for prod in ["ICE", "PAK", "CRUMBLE", "POD"]:
                 if prod in line_u:
                     q = re.search(r'(\d+(?:[.,]\d+)?)', line.replace(",", "."))
                     if q:
                         itens[prod] = itens.get(prod, 0) + float(q.group(1))
-
             if any(x in line_u for x in ["TOTAL", "R$"]):
                 v = re.search(r'(\d+(?:[.,]\d+)?)', line.replace(",", "."))
                 if v: total = float(v.group(1))
-
             if "TAXA" in line_u:
                 v = re.search(r'(\d+(?:[.,]\d+)?)', line.replace(",", "."))
                 if v: taxa = float(v.group(1))
-
             if any(x in line_u for x in ["DINHEIRO", "GRANA", "ESPECIE", "ESPÉCIE"]):
                 pagamento = "DINHEIRO"
             elif "PIX" in line_u:
                 pagamento = "PIX"
-
             if "RESPONSAVEL" in line_u or "RESPONSÁVEL" in line_u:
                 responsavel = line.split(":", 1)[-1].strip()
             elif any(x in line_u for x in ["RD", "BART"]) and ":" in line:
@@ -469,8 +567,8 @@ async def processar_mensagem(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         registrar_caixa("entrada", total, f"Pedido #{numero} - {cliente}")
 
-        pag_emoji  = "📲" if pagamento == "PIX" else "💵"
-        itens_str  = "\n".join(f"   • {k}: {v:.1f}" for k, v in itens.items()) or "   (nenhum item)"
+        pag_emoji = "📲" if pagamento == "PIX" else "💵"
+        itens_str = "\n".join(f"   • {k}: {v:.1f}" for k, v in itens.items()) or "   (nenhum item)"
         await update.message.reply_text(
             f"✅ <b>Pedido #{numero} registrado!</b>\n"
             f"👤 {cliente}\n{itens_str}\n"
