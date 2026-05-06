@@ -1458,12 +1458,38 @@ async def processar_mensagem(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 # ====================== MAIN ======================
 
+FOTOS_LOCAL_DIR = os.path.join(os.path.dirname(__file__), "fotos_local")
+
+async def upload_local_fotos(app):
+    """Sobe fotos locais ao Telegram na inicialização e guarda os file_ids."""
+    if not os.path.exists(FOTOS_LOCAL_DIR):
+        return
+    fotos = load_fotos()
+    for cod in PRODUTOS_INFO:
+        if cod in fotos:
+            continue
+        for ext in ("jpg", "jpeg", "png", "webp"):
+            path = os.path.join(FOTOS_LOCAL_DIR, f"{cod}.{ext}")
+            if os.path.exists(path):
+                try:
+                    with open(path, "rb") as f:
+                        msg = await app.bot.send_photo(
+                            chat_id=ADMIN_ID, photo=f,
+                            disable_notification=True)
+                    save_foto(cod, msg.photo[-1].file_id)
+                    await app.bot.delete_message(
+                        chat_id=ADMIN_ID, message_id=msg.message_id)
+                    logging.info(f"Foto local '{cod}' registrada.")
+                except Exception as e:
+                    logging.warning(f"Falha ao enviar foto local de {cod}: {e}")
+                break
+
 def main():
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     if not token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN não definido!")
 
-    app = ApplicationBuilder().token(token).build()
+    app = ApplicationBuilder().token(token).post_init(upload_local_fotos).build()
 
     app.add_handler(CommandHandler("start",      start))
     app.add_handler(CommandHandler("menu",       start))
