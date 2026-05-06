@@ -335,6 +335,130 @@ def build_estoque_text():
     texto += f"📦 Valor em estoque: <b>R$ {valor_total:,.0f}</b>"
     return texto
 
+def build_estoque_historico_text(data_str: str) -> str:
+    """Estoque de um dia específico: início, saídas e saldo final."""
+    data_dt   = datetime.datetime.strptime(data_str, "%Y-%m-%d").date()
+    hoje      = datetime.date.today()
+    data_fmt  = data_dt.strftime("%d/%m/%Y")
+    dia_sem   = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"][data_dt.weekday()]
+    eh_hoje   = (data_dt == hoje)
+
+    conn = get_db(); c = conn.cursor()
+    c.execute("SELECT codigo, estoque, preco_venda FROM produtos")
+    estoque_atual = {cod: (est, preco) for cod, est, preco in c.fetchall()}
+
+    # Saídas APÓS esse dia (para reconstruir estoque no início do dia)
+    prox_dia = (data_dt + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+    c.execute("""
+        SELECT i.produto, SUM(i.quantidade)
+        FROM itens_pedido i JOIN pedidos p ON i.pedido_id = p.id
+        WHERE p.data >= ? AND p.status != 'CANCELADO'
+        GROUP BY i.produto
+    """, (prox_dia,))
+    saidas_apos = dict(c.fetchall())
+
+    # Saídas desse dia
+    c.execute("""
+        SELECT i.produto, SUM(i.quantidade)
+        FROM itens_pedido i JOIN pedidos p ON i.pedido_id = p.id
+        WHERE p.data LIKE ? AND p.status != 'CANCELADO'
+        GROUP BY i.produto
+    """, (f"{data_str}%",))
+    saidas_dia = dict(c.fetchall())
+
+    # Pedidos e faturamento do dia
+    c.execute(
+        "SELECT COUNT(*), COALESCE(SUM(total),0), "
+        "COALESCE(SUM(CASE WHEN pagamento='PIX' THEN total ELSE 0 END),0), "
+        "COALESCE(SUM(CASE WHEN pagamento='DINHEIRO' THEN total ELSE 0 END),0) "
+        "FROM pedidos WHERE data LIKE ? AND status!='CANCELADO'",
+        (f"{data_str}%",)
+    )
+    qtd_ped, total_dia, total_pix, total_din = c.fetchone()
+    conn.close()
+
+    titulo = f"📦 <b>ESTOQUE</b>  ·  {dia_sem} {data_fmt}"
+    if eh_hoje:
+        titulo += "  <i>(hoje)</i>"
+    texto  = titulo + "\n"
+    texto += f"━━━━━━━━━━━━━━━━━━━━\n\n"
+
+    valor_saiu_total = 0.0
+    for cod, (nome_emoji, _, unidade) in PRODUTOS_INFO.items():
+        est_at, preco = estoque_atual.get(cod, (0, 0))
+        saiu  = saidas_dia.get(cod, 0.0)
+        apos  = saidas_apos.get(cod, 0.0)
+        ini   = est_at + saiu + apos   # estoque no início do dia
+        fim   = ini - saiu             # estoque no fim do dia
+
+        max_ref  = ESTOQUE_MAX_REF.get(cod, 100)
+        pct_ini  = int(min(100, (ini / max_ref) * 100)) if max_ref > 0 and ini > 0 else 0
+        pct_fim  = int(min(100, (fim / max_ref) * 100)) if max_ref > 0 and fim > 0 else 0
+
+        ini_str  = f"{ini:.0f}" if ini == int(ini) else f"{ini:.1f}"
+        fim_str  = f"{fim:.0f}" if fim == int(fim) else f"{fim:.1f}"
+        saiu_str = f"{saiu:.0f}" if saiu == int(saiu) else f"{saiu:.1f}"
+        v_saiu   = saiu * preco
+        valor_saiu_total += v_saiu
+
+        if saiu > 0:
+            barra_i = barra_estoque(ini, max_ref)
+            barra_f = barra_estoque(fim, max_ref)
+            texto += f"<b>{nome_emoji}</b>\n"
+            texto += f"  Início  <code>{barra_i}</code> {pct_ini}%  {ini_str}{unidade}\n"
+            texto += f"  Final   <code>{barra_f}</code> {pct_fim}%  {fim_str}{unidade}\n"
+            texto += f"  📉 Saiu: <b>{saiu_str} {unidade}</b>  ·  💵 R$ {v_saiu:.0f}\n\n"
+        else:
+            barra_i = barra_estoque(ini, max_ref)
+            st_icon = "❌" if ini <= 0 else ("⚠️" if ini <= 20 else "✅")
+            texto += f"<b>{nome_emoji}</b>  {st_icon}\n"
+            texto += f"  <code>{barra_i}</code>  {ini_str}{unidade}  ·  sem saída\n\n"
+
+    texto += f"━━━━━━━━━━━━━━━━━━━━\n"
+    if qtd_ped > 0:
+        texto += f"🧾 <b>{qtd_ped} pedido(s)</b>  ·  💰 <b>R$ {total_dia:.0f}</b>\n"
+        if total_pix > 0:
+            texto += f"   📲 PIX: R$ {total_pix:.0f}"
+        if total_din > 0:
+            texto += f"  💵 Dinheiro: R$ {total_din:.0f}"
+        if total_pix > 0 or total_din > 0:
+            texto += "\n"
+        texto += f"📦 Total saiu (valor): <b>R$ {valor_saiu_total:.0f}</b>"
+    else:
+        texto += f"🧾 Nenhum pedido nesse dia."
+    return texto
+
+def estoque_nav_keyboard(data_str: str, voltar_cb: str) -> InlineKeyboardMarkup:
+    data_dt  = datetime.datetime.strptime(data_str, "%Y-%m-%d").date()
+    hoje     = datetime.date.today()
+    ant      = (data_dt - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+    prox     = (data_dt + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+    data_fmt = data_dt.strftime("%d/%m")
+
+    btn_prox = (
+        InlineKeyboardButton("Próximo ▶", callback_data=f"estoque_dia_{prox}")
+        if data_dt < hoje else
+        InlineKeyboardButton("▶", callback_data="noop")
+    )
+    rows = [
+        [
+            InlineKeyboardButton("◀ Anterior", callback_data=f"estoque_dia_{ant}"),
+            InlineKeyboardButton(f"📅 {data_fmt}", callback_data="noop"),
+            btn_prox,
+        ],
+    ]
+    # Atalhos rápidos
+    atalhos = []
+    if data_str != hoje.strftime("%Y-%m-%d"):
+        atalhos.append(InlineKeyboardButton("📊 Hoje", callback_data="estoque"))
+    ontem = (hoje - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+    if data_str != ontem:
+        atalhos.append(InlineKeyboardButton("⏪ Ontem", callback_data=f"estoque_dia_{ontem}"))
+    if atalhos:
+        rows.append(atalhos)
+    rows.append([InlineKeyboardButton("← Menu", callback_data=voltar_cb)])
+    return InlineKeyboardMarkup(rows)
+
 def build_pedidos_dia_text(hoje: str) -> str:
     hoje_fmt = datetime.datetime.strptime(hoje, "%Y-%m-%d").strftime("%d/%m/%Y")
     conn = get_db(); c = conn.cursor()
@@ -1031,8 +1155,25 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif query.data == "estoque":
         voltar = "admin_menu_principal" if is_admin(query.from_user.id) else "socio_menu_principal"
-        kb_vol = InlineKeyboardMarkup([[InlineKeyboardButton("← Menu", callback_data=voltar)]])
-        await query.edit_message_text(build_estoque_text(), parse_mode="HTML", reply_markup=kb_vol)
+        hoje_str = datetime.date.today().strftime("%Y-%m-%d")
+        await query.edit_message_text(
+            build_estoque_historico_text(hoje_str),
+            parse_mode="HTML",
+            reply_markup=estoque_nav_keyboard(hoje_str, voltar)
+        )
+
+    elif query.data.startswith("estoque_dia_"):
+        data_str = query.data[len("estoque_dia_"):]
+        voltar   = "admin_menu_principal" if is_admin(query.from_user.id) else "socio_menu_principal"
+        try:
+            datetime.datetime.strptime(data_str, "%Y-%m-%d")
+        except ValueError:
+            await query.answer("Data inválida.", show_alert=True); return
+        await query.edit_message_text(
+            build_estoque_historico_text(data_str),
+            parse_mode="HTML",
+            reply_markup=estoque_nav_keyboard(data_str, voltar)
+        )
 
     elif query.data == "pedidos_dia":
         if not is_admin(query.from_user.id):
