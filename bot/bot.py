@@ -2460,25 +2460,75 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "loja_status":
         cid = query.from_user.id
         conn = get_db(); c = conn.cursor()
-        c.execute("SELECT numero, total, pagamento, status, data, endereco FROM pedidos WHERE customer_chat_id=? ORDER BY id DESC LIMIT 1", (cid,))
+        c.execute("SELECT id, numero, total, pagamento, status, data, endereco FROM pedidos WHERE customer_chat_id=? ORDER BY id DESC LIMIT 1", (cid,))
         row = c.fetchone(); conn.close()
         kb_vol = InlineKeyboardMarkup([[InlineKeyboardButton("← Voltar", callback_data="loja_menu")]])
         if not row:
             await query.edit_message_text("📋 Nenhum pedido encontrado.\n\nFaça seu primeiro pedido! 🛒", reply_markup=kb_vol)
             return
-        numero, total, pag, status, data, endereco = row
+        ped_id, numero, total, pag, status, data, endereco = row
         pag_emoji    = "📲" if pag == "PIX" else "💵"
-        status_texto = "✅ Confirmado" if status == "OK" else ("❌ Cancelado" if status == "CANCELADO" else status)
+        status_texto = "✅ Confirmado" if status == "OK" else ("🚚 Entregue" if status == "ENTREGUE" else ("❌ Cancelado" if status == "CANCELADO" else status))
         hora = data[11:16] if data and len(data) > 10 else ""
         end_str = f"\n📍 {endereco}" if endereco else ""
+        kb_rows = [[InlineKeyboardButton("← Voltar", callback_data="loja_menu")]]
+        if status == "OK":
+            kb_rows.insert(0, [InlineKeyboardButton("❌ Cancelar Pedido", callback_data=f"loja_cancelar_confirm_{ped_id}")])
         await query.edit_message_text(
             f"📋 <b>Último Pedido</b>\n━━━━━━━━━━━━━━\n\n"
             f"🔢 Pedido #{numero}\n"
             f"📊 Status: {status_texto}\n"
             f"💰 R$ {total:.0f}  {pag_emoji} {pag}\n"
             f"🕐 {hora}{end_str}",
+            parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb_rows)
+        )
+
+    elif query.data.startswith("loja_cancelar_confirm_"):
+        ped_id = int(query.data.split("_")[-1])
+        conn = get_db(); c = conn.cursor()
+        c.execute("SELECT numero, total FROM pedidos WHERE id=? AND customer_chat_id=?", (ped_id, query.from_user.id))
+        row = c.fetchone(); conn.close()
+        if not row:
+            await query.answer("❌ Pedido não encontrado.", show_alert=True); return
+        numero, total = row
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Sim, cancelar",  callback_data=f"loja_cancelar_ok_{ped_id}"),
+             InlineKeyboardButton("← Não, voltar",    callback_data="loja_status")],
+        ])
+        await query.edit_message_text(
+            f"⚠️ <b>Cancelar pedido #{numero}?</b>\n\n"
+            f"💰 R$ {total:.0f}\n\n"
+            f"Essa ação não pode ser desfeita.",
+            parse_mode="HTML", reply_markup=kb
+        )
+
+    elif query.data.startswith("loja_cancelar_ok_"):
+        ped_id = int(query.data.split("_")[-1])
+        conn = get_db(); c = conn.cursor()
+        c.execute("SELECT numero, total, status, customer_chat_id FROM pedidos WHERE id=?", (ped_id,))
+        row = c.fetchone()
+        if not row or row[2] != "OK" or row[3] != query.from_user.id:
+            conn.close()
+            await query.answer("❌ Pedido não pode ser cancelado.", show_alert=True); return
+        numero, total, _, _ = row
+        c.execute("UPDATE pedidos SET status='CANCELADO' WHERE id=?", (ped_id,))
+        # Reverter entrada no caixa
+        c.execute("DELETE FROM caixa WHERE descricao LIKE ? AND tipo='entrada'", (f"%{numero}%",))
+        conn.commit(); conn.close()
+        kb_vol = InlineKeyboardMarkup([[InlineKeyboardButton("← Voltar", callback_data="loja_menu")]])
+        await query.edit_message_text(
+            f"❌ <b>Pedido #{numero} cancelado.</b>\n\nSe precisar, faça um novo pedido! 🛒",
             parse_mode="HTML", reply_markup=kb_vol
         )
+        # Notificar admin
+        if ADMIN_ID:
+            await context.bot.send_message(
+                ADMIN_ID,
+                f"⚠️ <b>Pedido cancelado pelo cliente</b>\n\n"
+                f"🔢 #{numero}  💰 R$ {total:.0f}\n"
+                f"👤 @{query.from_user.username or query.from_user.first_name}",
+                parse_mode="HTML"
+            )
 
     elif query.data == "socio_entregas_pendentes":
         if not is_entregador(query.from_user):
