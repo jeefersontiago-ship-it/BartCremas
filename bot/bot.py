@@ -1089,22 +1089,35 @@ def build_lucro_text() -> str:
     msg += bloco("Este Mês",   fat_mes,   qtd_mes)
     msg += "\n"
     msg += bloco("Total Geral", fat_total, qtd_total)
+    # Projeção: vender todo o estoque atual
+    conn2 = get_db(); c2 = conn2.cursor()
+    c2.execute("SELECT nome, estoque, preco_venda FROM produtos WHERE estoque > 0 ORDER BY nome")
+    prods = c2.fetchall()
+    conn2.close()
+
+    msg += "\n━━━━━━━━━━━━━━━━━━━━\n"
+    msg += "🔮 <b>Projeção: se vender todo o estoque</b>\n\n"
+    total_pot = 0.0
+    for nome, est, preco in prods:
+        subtotal = est * preco
+        total_pot += subtotal
+        msg += f"  {nome}: {est:.0f} × R${preco:.0f} = <b>R$ {subtotal:.0f}</b>\n"
+    lucro_proj   = total_pot - divida
+    p_socio_proj = lucro_proj / 2
+    msg += f"\n  💰 Faturamento potencial: <b>R$ {total_pot:.0f}</b>\n"
+    msg += f"  📦 Custo fornecedor:      <b>R$ {divida:.0f}</b>\n"
+    msg += f"  ─────────────────────\n"
+    if lucro_proj >= 0:
+        msg += f"  💵 Lucro líquido:         <b>R$ {lucro_proj:.0f}</b>\n"
+        msg += f"  👤 Cada sócio (÷ 2):     <b>R$ {p_socio_proj:.0f}</b>\n"
+    else:
+        msg += f"  ⚠️ Ainda no prejuízo:    <b>-R$ {abs(lucro_proj):.0f}</b>\n"
+
     msg += "\n━━━━━━━━━━━━━━━━━━━━\n"
     msg += "💸 <b>Retiradas já feitas</b>\n"
     msg += f"  👤 Bart:  R$ {ret_bart:.0f}\n"
     msg += f"  👤 RD:    R$ {ret_rd:.0f}\n"
     msg += f"  📊 Total: R$ {ret_total:.0f}\n"
-    msg += "\n━━━━━━━━━━━━━━━━━━━━\n"
-    # Saldo disponível para divisão
-    saldo_disp = saldo_bco - divida
-    msg += "🏦 <b>Saldo disponível (banco - fornecedor)</b>\n"
-    if saldo_disp >= 0:
-        msg += f"  💰 Disponível:  <b>R$ {saldo_disp:.0f}</b>\n"
-        msg += f"  👤 Bart:  R$ {saldo_disp/2:.0f}   (já retirou R$ {ret_bart:.0f})\n"
-        msg += f"  👤 RD:    R$ {saldo_disp/2:.0f}   (já retirou R$ {ret_rd:.0f})\n"
-    else:
-        msg += f"  ⚠️ Saldo insuficiente para cobrir fornecedor\n"
-        msg += f"  📉 Déficit: R$ {abs(saldo_disp):.0f}\n"
     return msg
 
 def admin_financeiro_keyboard():
