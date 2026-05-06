@@ -3387,8 +3387,46 @@ async def job_abrir_loja(context: ContextTypes.DEFAULT_TYPE):
 async def job_fechar_loja(context: ContextTypes.DEFAULT_TYPE):
     """Fecha a loja e envia relatório diário automaticamente."""
     set_config("loja_aberta", 0)
+    hoje = datetime.date.today().strftime("%Y-%m-%d")
+
+    # Buscar clientes que compraram hoje
+    conn = get_db(); c = conn.cursor()
+    c.execute("""
+        SELECT p.cliente, p.numero, p.total, p.pagamento, p.endereco,
+               p.customer_chat_id, cl.username
+        FROM pedidos p
+        LEFT JOIN clientes cl ON cl.chat_id = p.customer_chat_id
+        WHERE DATE(p.data) = ? AND p.status NOT IN ('CANCELADO')
+        ORDER BY p.id
+    """, (hoje,))
+    pedidos_hoje = c.fetchall()
+    conn.close()
+
+    # Montar e enviar lista de clientes para o entregador
+    if pedidos_hoje:
+        linhas = []
+        for i, (nome, numero, total, pag, end, cid, uname) in enumerate(pedidos_hoje, 1):
+            contato = f"@{uname}" if uname else (f"<a href='tg://user?id={cid}'>{nome}</a>" if cid else nome)
+            end_str = f" · 📍 {end}" if end and end != "Retirada" else (" · 🏪 Retirada" if end == "Retirada" else "")
+            pag_ico = "💳" if pag == "PIX" else "💵"
+            linhas.append(f"{i}. {contato} — R$ {total:.0f} {pag_ico}{end_str}")
+        resumo = "\n".join(linhas)
+        try:
+            await context.bot.send_message(
+                chat_id=ENTREGADOR_USERNAME,
+                text=(
+                    f"📋 <b>CLIENTES DO DIA — {hoje}</b>\n"
+                    f"━━━━━━━━━━━━━━\n\n"
+                    f"{resumo}\n\n"
+                    f"━━━━━━━━━━━━━━\n"
+                    f"Total: <b>{len(pedidos_hoje)} pedido(s)</b>"
+                ),
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            logging.warning(f"Falha ao enviar lista de clientes ao entregador: {e}")
+
     if ADMIN_ID:
-        hoje = datetime.date.today().strftime("%Y-%m-%d")
         rel  = build_relatorio_text(hoje)
         try:
             await context.bot.send_message(
