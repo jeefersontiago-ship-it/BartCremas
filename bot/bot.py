@@ -34,6 +34,11 @@ PRODUTOS_INFO = {
 def is_admin(user_id):
     return ADMIN_ID != 0 and user_id == ADMIN_ID
 
+def is_entregador(user) -> bool:
+    if not user or not user.username:
+        return False
+    return f"@{user.username}".lower() == ENTREGADOR_USERNAME.lower()
+
 FOTOS_PATH = os.path.join(os.path.dirname(__file__), "fotos.json")
 
 def load_fotos() -> dict:
@@ -291,6 +296,11 @@ def customer_keyboard():
         [InlineKeyboardButton("📦  ver cardápio",    callback_data="loja_produtos")],
     ])
 
+def entregador_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📦  ver cardápio",    callback_data="loja_produtos")],
+    ])
+
 def build_cart_text(carrinho: dict) -> str:
     subtotal = sum(carrinho.get(cod, 0) * PRODUTOS_INFO[cod][1] for cod in PRODUTOS_INFO)
     taxa     = 10.0 if 0 < subtotal < 500 else 0.0
@@ -333,7 +343,8 @@ def build_cart_keyboard(carrinho: dict) -> InlineKeyboardMarkup:
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
-    if is_admin(update.effective_user.id):
+    user = update.effective_user
+    if is_admin(user.id):
         await update.message.reply_text(
             "🍪 <b>Cookie Control Pro</b>\n"
             "━━━━━━━━━━━━━━━━━━\n"
@@ -341,6 +352,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Escolha uma opção abaixo 👇",
             parse_mode="HTML",
             reply_markup=main_keyboard()
+        )
+    elif is_entregador(user):
+        await update.message.reply_text(
+            "🛵  <b>CARDÁPIO</b>\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "Consulta de produtos disponíveis:",
+            parse_mode="HTML",
+            reply_markup=entregador_keyboard()
         )
     else:
         await update.message.reply_text(
@@ -1012,10 +1031,16 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 media.append(InputMediaPhoto(fotos[cod], caption=caption, parse_mode="HTML"))
             else:
                 sem_foto += f"{status}  {nome}\n    R$ {preco:.0f}/{unidade}\n\n"
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🛒  pedir agora", callback_data="loja_iniciar")],
-            [InlineKeyboardButton("← voltar",        callback_data="loja_menu")],
-        ])
+        entrega = is_entregador(query.from_user)
+        if entrega:
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Atualizar", callback_data="loja_produtos")],
+            ])
+        else:
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🛒  pedir agora", callback_data="loja_iniciar")],
+                [InlineKeyboardButton("← voltar",        callback_data="loja_menu")],
+            ])
         if media:
             await context.bot.send_media_group(chat_id=query.message.chat_id, media=media)
         header = "📦  <b>CARDÁPIO</b>\n━━━━━━━━━━━━━━━━━━\n\n"
@@ -1103,13 +1128,22 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif query.data == "loja_menu":
         context.user_data.clear()
-        await query.edit_message_text(
-            "🖤  <b>STORE</b>\n"
-            "━━━━━━━━━━━━━━━━━━\n"
-            "entrega a partir das 19:30",
-            parse_mode="HTML",
-            reply_markup=customer_keyboard()
-        )
+        if is_entregador(query.from_user):
+            await query.edit_message_text(
+                "🛵  <b>CARDÁPIO</b>\n"
+                "━━━━━━━━━━━━━━━━━━\n"
+                "Consulta de produtos disponíveis:",
+                parse_mode="HTML",
+                reply_markup=entregador_keyboard()
+            )
+        else:
+            await query.edit_message_text(
+                "🖤  <b>STORE</b>\n"
+                "━━━━━━━━━━━━━━━━━━\n"
+                "entrega a partir das 19:30",
+                parse_mode="HTML",
+                reply_markup=customer_keyboard()
+            )
 
     elif query.data == "loja_cancelar":
         context.user_data.clear()
