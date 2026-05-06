@@ -737,57 +737,155 @@ def build_admin_header() -> str:
     msg += f"🏦 Saldo Banco: <b>R$ {saldo:.2f}</b>"
     return msg
 
-def build_relatorio_text(hoje):
-    hoje_fmt = datetime.datetime.strptime(hoje, "%Y-%m-%d").strftime("%d/%m/%Y")
-    conn = get_db()
-    c = conn.cursor()
+def build_relatorio_historico_text(data_str: str) -> str:
+    """Relatório completo de um dia: vendas, itens, estoque reconstruído, financeiro."""
+    data_dt  = datetime.datetime.strptime(data_str, "%Y-%m-%d").date()
+    hoje     = datetime.date.today()
+    data_fmt = data_dt.strftime("%d/%m/%Y")
+    dia_sem  = ["Seg","Ter","Qua","Qui","Sex","Sáb","Dom"][data_dt.weekday()]
+    eh_hoje  = (data_dt == hoje)
 
-    c.execute("SELECT SUM(total), COUNT(*) FROM pedidos WHERE data LIKE ?", (f"{hoje}%",))
-    total_vendido, qtd_pedidos = c.fetchone()
-    total_vendido = total_vendido or 0
+    conn = get_db(); c = conn.cursor()
 
-    c.execute("SELECT pagamento, SUM(total) FROM pedidos WHERE data LIKE ? GROUP BY pagamento",
-              (f"{hoje}%",))
-    pagamentos = dict(c.fetchall())
+    # ── PEDIDOS ────────────────────────────────────────────────────────
+    c.execute("""
+        SELECT COUNT(*),
+               COALESCE(SUM(CASE WHEN status!='CANCELADO' THEN total ELSE 0 END),0),
+               COALESCE(SUM(CASE WHEN status='ENTREGUE'  THEN 1 ELSE 0 END),0),
+               COALESCE(SUM(CASE WHEN status='CANCELADO' THEN 1 ELSE 0 END),0)
+        FROM pedidos WHERE data LIKE ?
+    """, (f"{data_str}%",))
+    n_total, total_vendido, n_entregues, n_cancelados = c.fetchone()
+    n_ativos = n_total - n_cancelados
 
-    c.execute("""SELECT i.produto, SUM(i.quantidade)
-                 FROM itens_pedido i JOIN pedidos p ON i.pedido_id = p.id
-                 WHERE p.data LIKE ? GROUP BY i.produto""", (f"{hoje}%",))
-    saidas = dict(c.fetchall())
+    c.execute("""
+        SELECT pagamento, COUNT(*), COALESCE(SUM(total),0)
+        FROM pedidos WHERE data LIKE ? AND status!='CANCELADO'
+        GROUP BY pagamento
+    """, (f"{data_str}%",))
+    pag = {p: (cnt, val) for p, cnt, val in c.fetchall()}
 
-    c.execute("SELECT codigo, nome, estoque FROM produtos")
-    estoque_atual = c.fetchall()
+    # ── ITENS VENDIDOS ─────────────────────────────────────────────────
+    c.execute("""
+        SELECT i.produto, SUM(i.quantidade)
+        FROM itens_pedido i JOIN pedidos p ON i.pedido_id=p.id
+        WHERE p.data LIKE ? AND p.status!='CANCELADO'
+        GROUP BY i.produto
+    """, (f"{data_str}%",))
+    saidas_dia = dict(c.fetchall())
 
-    c.execute("SELECT SUM(CASE WHEN tipo='saida' THEN valor ELSE 0 END) FROM caixa WHERE data LIKE ?",
-              (f"{hoje}%",))
-    total_saidas = c.fetchone()[0] or 0
+    # ── ESTOQUE: reconstrução histórica ────────────────────────────────
+    c.execute("SELECT codigo, estoque, preco_venda FROM produtos")
+    est_atual = {cod: (est, preco) for cod, est, preco in c.fetchall()}
+
+    prox_dia = (data_dt + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+    c.execute("""
+        SELECT i.produto, SUM(i.quantidade)
+        FROM itens_pedido i JOIN pedidos p ON i.pedido_id=p.id
+        WHERE p.data >= ? AND p.status!='CANCELADO'
+        GROUP BY i.produto
+    """, (prox_dia,))
+    saidas_apos = dict(c.fetchall())
+
+    # ── CAIXA DO DIA ───────────────────────────────────────────────────
+    c.execute("""
+        SELECT tipo, COALESCE(SUM(valor),0) FROM caixa
+        WHERE data LIKE ? GROUP BY tipo
+    """, (f"{data_str}%",))
+    caixa_dia = dict(c.fetchall())
+    tot_ent   = caixa_dia.get("entrada", 0.0)
+    tot_sai   = caixa_dia.get("saida",   0.0)
+    saldo_dia = tot_ent - tot_sai
 
     saldo_banco = get_config("saldo_banco")
     divida      = get_config("divida_fornecedor")
     conn.close()
 
-    rel  = "📊 <b>FECHAMENTO DO DIA</b>\n"
-    rel += f"📅 {hoje_fmt}\n"
-    rel += "━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-    rel += f"📦 <b>Pedidos Realizados:</b> {qtd_pedidos or 0}\n"
-    rel += f"💰 <b>Total Vendido:</b> R$ {total_vendido:.2f}\n\n"
-    rel += "💳 <b>Forma de Pagamento:</b>\n"
-    rel += f"   📲 PIX → R$ {pagamentos.get('PIX', 0):.2f}\n"
-    rel += f"   💵 Dinheiro → R$ {pagamentos.get('DINHEIRO', 0):.2f}\n"
-    if total_saidas > 0:
-        rel += f"   💸 Saídas → R$ {total_saidas:.2f}\n"
-        rel += f"   <b>Líquido: R$ {total_vendido - total_saidas:.2f}</b>\n"
-    rel += "\n📦 <b>Saídas do Dia:</b>\n"
-    for cod in ["ICE", "PAK", "CRUMBLE", "POD_I", "POD_S"]:
-        rel += f"   • {cod}: <b>{saidas.get(cod, 0):.1f}</b>\n"
-    rel += "\n📦 <b>Estoque Restante:</b>\n"
-    for cod, nome, qtd in estoque_atual:
-        rel += f"   {estoque_emoji(qtd)} {nome}: <b>{qtd:.1f}</b>\n"
-    rel += f"\n🏦 Saldo Banco: R$ {saldo_banco:.2f}\n"
-    rel += f"📉 Dívida Fornecedor: R$ {divida:.2f}\n"
-    rel += "\n━━━━━━━━━━━━━━━━━━━━━━━\n"
-    rel += "✅ Relatório gerado automaticamente"
-    return rel
+    titulo = f"📊 <b>RELATÓRIO</b>  ·  {dia_sem} {data_fmt}"
+    if eh_hoje:
+        titulo += "  <i>(hoje)</i>"
+    msg  = titulo + "\n"
+    msg += "━━━━━━━━━━━━━━━━━━━━\n"
+
+    # ── SEÇÃO VENDAS ───────────────────────────────────────────────────
+    msg += f"\n🛒 <b>VENDAS</b>\n"
+    msg += f"  Pedidos: <b>{n_ativos}</b>"
+    if n_cancelados:
+        msg += f"  ·  ❌ Cancelados: {n_cancelados}"
+    msg += "\n"
+    if n_ativos:
+        msg += f"  ✅ Entregues: <b>{n_entregues}</b>  ·  🚚 Pendentes: <b>{n_ativos - n_entregues}</b>\n"
+    pix_cnt, pix_val = pag.get("PIX",      (0, 0.0))
+    din_cnt, din_val = pag.get("DINHEIRO", (0, 0.0))
+    if pix_val:
+        msg += f"  📲 PIX: <b>R$ {pix_val:.0f}</b>  ({pix_cnt} ped.)\n"
+    if din_val:
+        msg += f"  💵 Dinheiro: <b>R$ {din_val:.0f}</b>  ({din_cnt} ped.)\n"
+    msg += f"  💰 Total bruto: <b>R$ {total_vendido:.0f}</b>\n"
+    if tot_sai:
+        msg += f"  💸 Saídas caixa: -R$ {tot_sai:.0f}\n"
+        msg += f"  📈 <b>Líquido: R$ {total_vendido - tot_sai:.0f}</b>\n"
+
+    # ── SEÇÃO ITENS ────────────────────────────────────────────────────
+    msg += f"\n📦 <b>ITENS VENDIDOS</b>\n"
+    valor_saiu = 0.0
+    algum = False
+    for cod, (emoji, _, unidade) in PRODUTOS_INFO.items():
+        saiu = saidas_dia.get(cod, 0.0)
+        if not saiu:
+            continue
+        _, preco = est_atual.get(cod, (0, 0))
+        v = saiu * preco
+        valor_saiu += v
+        saiu_str = f"{saiu:.0f}" if saiu == int(saiu) else f"{saiu:.1f}"
+        msg += f"  {emoji} <b>{saiu_str} {unidade}</b>  →  R$ {v:.0f}\n"
+        algum = True
+    if algum:
+        msg += f"  📊 Subtotal vendido: <b>R$ {valor_saiu:.0f}</b>\n"
+    else:
+        msg += "  <i>Nenhum item vendido.</i>\n"
+
+    # ── SEÇÃO ESTOQUE ──────────────────────────────────────────────────
+    msg += f"\n📦 <b>ESTOQUE</b>"
+    if not eh_hoje:
+        msg += "  <i>(fim do dia)</i>"
+    msg += "\n"
+    valor_est = 0.0
+    for cod, (emoji, _, unidade) in PRODUTOS_INFO.items():
+        est_at, preco = est_atual.get(cod, (0, 0))
+        saiu  = saidas_dia.get(cod, 0.0)
+        apos  = saidas_apos.get(cod, 0.0)
+        ini   = est_at + saiu + apos
+        fim   = ini - saiu
+        max_r = ESTOQUE_MAX_REF.get(cod, 100)
+        barra = barra_estoque(fim, max_r)
+        pct   = int(min(100, (fim / max_r) * 100)) if max_r > 0 and fim > 0 else 0
+        fim_s = f"{fim:.0f}" if fim == int(fim) else f"{fim:.1f}"
+        st    = "❌" if fim <= 0 else ("⚠️" if fim <= 20 else "✅")
+        valor_est += fim * preco
+        saiu_str  = (f"  <i>-{saiu:.0f}{unidade}</i>" if saiu else "")
+        msg += f"  {st} {emoji}  <code>{barra}</code>  <b>{fim_s}{unidade}</b>  {pct}%{saiu_str}\n"
+    msg += f"  💎 Valor em estoque: <b>R$ {valor_est:,.0f}</b>\n"
+
+    # ── SEÇÃO FINANCEIRO ───────────────────────────────────────────────
+    msg += f"\n💰 <b>FINANCEIRO</b>\n"
+    if tot_ent:
+        msg += f"  📥 Entradas do dia: R$ {tot_ent:.0f}\n"
+    if tot_sai:
+        msg += f"  📤 Saídas do dia:   R$ {tot_sai:.0f}\n"
+    cor = "+" if saldo_dia >= 0 else ""
+    msg += f"  💵 Saldo do dia: <b>{cor}R$ {saldo_dia:.0f}</b>\n"
+    msg += f"  🏦 Saldo Banco: <b>R$ {saldo_banco:.2f}</b>\n"
+    if divida > 0:
+        msg += f"  📉 Dívida fornecedor: R$ {divida:.0f}\n"
+        msg += f"  📊 Patrimônio líquido: <b>R$ {saldo_banco - divida:.0f}</b>\n"
+
+    msg += "\n━━━━━━━━━━━━━━━━━━━━"
+    return msg
+
+def build_relatorio_text(hoje: str) -> str:
+    """Alias para compatibilidade — usa o relatório histórico."""
+    return build_relatorio_historico_text(hoje)
 
 def main_keyboard():
     loja_btn = "🔴 Fechar Loja" if loja_esta_aberta() else "🟢 Abrir Loja"
@@ -1494,10 +1592,28 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not is_admin(query.from_user.id) and not is_entregador(query.from_user):
             await query.edit_message_text("❌ Acesso negado.")
             return
-        hoje = datetime.datetime.now().strftime("%Y-%m-%d")
+        hoje_str = datetime.date.today().strftime("%Y-%m-%d")
+        voltar   = "admin_menu_principal" if is_admin(query.from_user.id) else "socio_menu_principal"
+        await query.edit_message_text(
+            build_relatorio_historico_text(hoje_str),
+            parse_mode="HTML",
+            reply_markup=_nav_keyboard("relatorio_dia_", hoje_str, voltar)
+        )
+
+    elif query.data.startswith("relatorio_dia_"):
+        if not is_admin(query.from_user.id) and not is_entregador(query.from_user):
+            await query.answer("❌ Acesso negado.", show_alert=True); return
+        data_str = query.data[len("relatorio_dia_"):]
+        try:
+            datetime.datetime.strptime(data_str, "%Y-%m-%d")
+        except ValueError:
+            await query.answer("Data inválida.", show_alert=True); return
         voltar = "admin_menu_principal" if is_admin(query.from_user.id) else "socio_menu_principal"
-        kb_vol = InlineKeyboardMarkup([[InlineKeyboardButton("← Menu", callback_data=voltar)]])
-        await query.edit_message_text(build_relatorio_text(hoje), parse_mode="HTML", reply_markup=kb_vol)
+        await query.edit_message_text(
+            build_relatorio_historico_text(data_str),
+            parse_mode="HTML",
+            reply_markup=_nav_keyboard("relatorio_dia_", data_str, voltar)
+        )
 
     # ====================== MENU ADMIN ======================
 
