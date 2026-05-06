@@ -243,8 +243,21 @@ async def cmd_relatorio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("❌ Apenas o administrador pode ver o relatório.")
         return
-    hoje = datetime.datetime.now().strftime("%Y-%m-%d")
-    await update.message.reply_text(build_relatorio_text(hoje), parse_mode="HTML")
+    if context.args:
+        raw = context.args[0].strip()
+        try:
+            ano = datetime.datetime.now().year
+            if len(raw) <= 5:          # DD/MM
+                data = datetime.datetime.strptime(f"{raw}/{ano}", "%d/%m/%Y")
+            else:                       # DD/MM/AAAA
+                data = datetime.datetime.strptime(raw, "%d/%m/%Y")
+            data_str = data.strftime("%Y-%m-%d")
+        except ValueError:
+            await update.message.reply_text("⚠️ Data inválida. Use: /relatorio 05/05")
+            return
+    else:
+        data_str = datetime.datetime.now().strftime("%Y-%m-%d")
+    await update.message.reply_text(build_relatorio_text(data_str), parse_mode="HTML")
 
 async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
