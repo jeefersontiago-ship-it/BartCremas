@@ -1,45 +1,50 @@
-# [Project name]
+# Cookie Stock Bot
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+A Telegram bot for tracking cookie flavor inventory — deduct stock by sending a message like `I 3`, check current levels with `/estoque`.
 
 ## Run & Operate
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
-- `pnpm run typecheck` — full typecheck across all packages
-- `pnpm run build` — typecheck + build all packages
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string
+- `python bot/bot.py` — run the Telegram bot (managed via "Telegram Bot" workflow)
+- Required env: `TELEGRAM_BOT_TOKEN` — Telegram bot token from @BotFather
 
 ## Stack
 
-- pnpm workspaces, Node.js 24, TypeScript 5.9
-- API: Express 5
-- DB: PostgreSQL + Drizzle ORM
-- Validation: Zod (`zod/v4`), `drizzle-zod`
-- API codegen: Orval (from OpenAPI spec)
-- Build: esbuild (CJS bundle)
+- Python 3.11
+- python-telegram-bot (polling mode)
+- JSON file for persistent storage (`bot/estoque.json`)
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `bot/bot.py` — main bot logic
+- `bot/estoque.json` — stock data (auto-created on first run)
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- Polling mode (not webhook) for simplicity in the Replit environment
+- Stock stored as a flat JSON file — no DB needed for this use case
+- Each message handler reloads and saves the JSON on every operation to avoid data loss
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+Telegram bot that tracks cookie flavor inventory:
+- **I** = Ice o Lator
+- **P** = Pak
+- **C** = Crumble
+- **VP** = Pod THC
+
+Commands: `/start`, `/estoque` (view stock), `/add <sabor> <qtd>` (restock)
+Messages: `<sabor> <qtd>` (deduct stock)
 
 ## User preferences
 
-_Populate as you build — explicit user instructions worth remembering across sessions._
+- Keep code in Python, not TypeScript
+- Portuguese language in bot messages
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
+- Only one bot instance should run at a time — two instances cause a 409 Conflict error from Telegram
+- Restart the "Telegram Bot" workflow after code changes
 
 ## Pointers
 
-- See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details
+- See the `workflows` skill for managing the bot workflow
