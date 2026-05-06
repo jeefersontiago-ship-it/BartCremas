@@ -508,6 +508,203 @@ def build_pedidos_dia_text(hoje: str) -> str:
     msg += f"💰 <b>R$ {total_geral:.0f}</b>  |  🏦 <b>Banco: R$ {saldo_banco:.2f}</b>"
     return msg
 
+def _nav_keyboard(prefix: str, data_str: str, voltar_cb: str) -> InlineKeyboardMarkup:
+    """Teclado de navegação genérico por dia para qualquer seção."""
+    data_dt  = datetime.datetime.strptime(data_str, "%Y-%m-%d").date()
+    hoje     = datetime.date.today()
+    ant      = (data_dt - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+    prox     = (data_dt + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+    data_fmt = data_dt.strftime("%d/%m")
+    btn_prox = (
+        InlineKeyboardButton("Próximo ▶", callback_data=f"{prefix}{prox}")
+        if data_dt < hoje else
+        InlineKeyboardButton("▶", callback_data="noop")
+    )
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton("◀ Anterior", callback_data=f"{prefix}{ant}"),
+         InlineKeyboardButton(f"📅 {data_fmt}", callback_data="noop"),
+         btn_prox],
+    ]
+    atalhos: list[InlineKeyboardButton] = []
+    hoje_str  = hoje.strftime("%Y-%m-%d")
+    ontem_str = (hoje - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+    if data_str != hoje_str:
+        atalhos.append(InlineKeyboardButton("📊 Hoje",   callback_data=f"{prefix}{hoje_str}"))
+    if data_str != ontem_str:
+        atalhos.append(InlineKeyboardButton("⏪ Ontem",  callback_data=f"{prefix}{ontem_str}"))
+    if atalhos:
+        rows.append(atalhos)
+    rows.append([InlineKeyboardButton("← Menu", callback_data=voltar_cb)])
+    return InlineKeyboardMarkup(rows)
+
+# ─── PEDIDOS HISTÓRICO ──────────────────────────────────────────────────────
+
+def build_pedidos_historico_text(data_str: str) -> str:
+    data_dt  = datetime.datetime.strptime(data_str, "%Y-%m-%d").date()
+    hoje     = datetime.date.today()
+    data_fmt = data_dt.strftime("%d/%m/%Y")
+    dia_sem  = ["Seg","Ter","Qua","Qui","Sex","Sáb","Dom"][data_dt.weekday()]
+    eh_hoje  = (data_dt == hoje)
+
+    conn = get_db(); c = conn.cursor()
+    c.execute("""
+        SELECT id, numero, cliente, total, pagamento, data, endereco, data_entrega, status
+        FROM pedidos
+        WHERE data LIKE ? AND status != 'CANCELADO'
+        ORDER BY id ASC
+    """, (f"{data_str}%",))
+    pedidos = c.fetchall()
+
+    n_entregue = 0; n_pend = 0
+    total_geral = 0.0; total_pix = 0.0; total_din = 0.0
+    linhas: list[str] = []
+
+    for ped_id, numero, cliente, total, pagamento, data_ped, endereco, data_entrega, status in pedidos:
+        hora = data_ped[11:16] if len(data_ped) > 10 else "?"
+        total = total or 0
+        total_geral += total
+        if pagamento == "PIX":
+            total_pix += total
+        else:
+            total_din += total
+
+        c.execute("SELECT produto, quantidade FROM itens_pedido WHERE pedido_id=?", (ped_id,))
+        itens_rows = c.fetchall()
+
+        # itens com subtotal
+        itens_partes: list[str] = []
+        for p, q in itens_rows:
+            emoji = PRODUTOS_INFO[p][0] if p in PRODUTOS_INFO else p
+            preco = PRODUTOS_INFO[p][1] if p in PRODUTOS_INFO else 0
+            itens_partes.append(f"{emoji}×{int(q)}  <i>R$ {int(q * preco)}</i>")
+        itens_str = "  ·  ".join(itens_partes)
+
+        if status == "ENTREGUE":
+            st_icon = "✅"; n_entregue += 1
+        else:
+            st_icon = "🚚"; n_pend += 1
+
+        pag_icon = "📲" if pagamento == "PIX" else "💵"
+
+        # endereço / retirada
+        if endereco and endereco not in ("", "Retirada"):
+            end_str = f"\n   📍 {endereco}"
+        elif endereco == "Retirada":
+            end_str = "\n   🏪 Retirada na loja"
+        else:
+            end_str = ""
+
+        # agendado?
+        ag_str = ""
+        if data_entrega and data_entrega != data_str:
+            try:
+                dt_fmt = datetime.datetime.strptime(data_entrega, "%Y-%m-%d").strftime("%d/%m")
+                ag_str = f"\n   📅 Agendado para {dt_fmt}"
+            except Exception:
+                pass
+
+        linha = (
+            f"{st_icon} <b>#{numero}</b>  {hora}  {pag_icon} <b>R$ {total:.0f}</b>\n"
+            f"   👤 {cliente}\n"
+            f"   {itens_str}"
+            f"{end_str}"
+            f"{ag_str}"
+        )
+        linhas.append(linha)
+
+    conn.close()
+
+    titulo = f"📋 <b>PEDIDOS</b>  ·  {dia_sem} {data_fmt}"
+    if eh_hoje:
+        titulo += "  <i>(hoje)</i>"
+    msg  = titulo + "\n"
+    msg += "━━━━━━━━━━━━━━━━━━━━\n"
+
+    if linhas:
+        # Limitar a 4000 chars para não estourar o Telegram
+        corpo = "\n\n".join(linhas)
+        if len(msg) + len(corpo) > 3800:
+            # truncar: mostrar últimos pedidos
+            linhas_ok: list[str] = []
+            tam = 0
+            for l in reversed(linhas):
+                if tam + len(l) + 4 > 3200:
+                    linhas_ok.insert(0, f"<i>… {len(linhas)-len(linhas_ok)} pedido(s) mais antigos omitidos</i>")
+                    break
+                linhas_ok.insert(0, l)
+                tam += len(l) + 4
+            corpo = "\n\n".join(linhas_ok)
+        msg += "\n" + corpo + "\n"
+    else:
+        msg += "\n<i>Nenhum pedido nesse dia.</i>\n"
+
+    msg += "\n━━━━━━━━━━━━━━━━━━━━\n"
+    n_total = len(pedidos)
+    msg += f"🧾 <b>{n_total} pedido(s)</b>  ·  ✅ {n_entregue}  🚚 {n_pend}\n"
+    if total_pix > 0:
+        msg += f"📲 PIX: <b>R$ {total_pix:.0f}</b>"
+    if total_din > 0:
+        sep = "  ·  " if total_pix > 0 else ""
+        msg += f"{sep}💵 Dinheiro: <b>R$ {total_din:.0f}</b>"
+    if n_total > 0:
+        msg += f"\n💰 Total: <b>R$ {total_geral:.0f}</b>"
+    return msg
+
+# ─── CAIXA HISTÓRICO ────────────────────────────────────────────────────────
+
+def build_caixa_historico_text(data_str: str) -> str:
+    data_dt  = datetime.datetime.strptime(data_str, "%Y-%m-%d").date()
+    hoje     = datetime.date.today()
+    data_fmt = data_dt.strftime("%d/%m/%Y")
+    dia_sem  = ["Seg","Ter","Qua","Qui","Sex","Sáb","Dom"][data_dt.weekday()]
+    eh_hoje  = (data_dt == hoje)
+
+    conn = get_db(); c = conn.cursor()
+    c.execute("""
+        SELECT tipo, valor, descricao, data
+        FROM caixa
+        WHERE data LIKE ?
+        ORDER BY id ASC
+    """, (f"{data_str}%",))
+    movs = c.fetchall()
+    conn.close()
+
+    saldo_banco = get_config("saldo_banco")
+
+    entradas = [(v, d, h[11:16]) for t, v, d, h in movs if t == "entrada"]
+    saidas   = [(v, d, h[11:16]) for t, v, d, h in movs if t == "saida"]
+    tot_ent  = sum(v for v, _, _ in entradas)
+    tot_sai  = sum(v for v, _, _ in saidas)
+    saldo_dia = tot_ent - tot_sai
+
+    titulo = f"💰 <b>CAIXA</b>  ·  {dia_sem} {data_fmt}"
+    if eh_hoje:
+        titulo += "  <i>(hoje)</i>"
+    msg  = titulo + "\n"
+    msg += "━━━━━━━━━━━━━━━━━━━━\n"
+
+    if entradas:
+        msg += "\n📥 <b>Entradas</b>\n"
+        for v, desc, hora in entradas:
+            msg += f"  {hora}  <b>+R$ {v:.0f}</b>  <i>{desc}</i>\n"
+
+    if saidas:
+        msg += "\n📤 <b>Saídas</b>\n"
+        for v, desc, hora in saidas:
+            msg += f"  {hora}  <b>-R$ {v:.0f}</b>  <i>{desc}</i>\n"
+
+    if not entradas and not saidas:
+        msg += "\n<i>Nenhuma movimentação nesse dia.</i>\n"
+
+    msg += "\n━━━━━━━━━━━━━━━━━━━━\n"
+    if entradas or saidas:
+        msg += f"📥 Entradas: <b>R$ {tot_ent:.0f}</b>\n"
+        msg += f"📤 Saídas:   <b>R$ {tot_sai:.0f}</b>\n"
+        cor = "+" if saldo_dia >= 0 else ""
+        msg += f"💵 Saldo do dia: <b>{cor}R$ {saldo_dia:.0f}</b>\n"
+    msg += f"\n🏦 <b>Saldo Banco atual: R$ {saldo_banco:.2f}</b>"
+    return msg
+
 def build_admin_header() -> str:
     """Cabeçalho rico do painel admin com dados ao vivo."""
     hoje = datetime.date.today().strftime("%Y-%m-%d")
@@ -1178,34 +1375,48 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "pedidos_dia":
         if not is_admin(query.from_user.id):
             await query.answer("❌ Acesso negado.", show_alert=True); return
-        hoje = datetime.date.today().strftime("%Y-%m-%d")
-        kb_vol = InlineKeyboardMarkup([[InlineKeyboardButton("← Menu", callback_data="admin_menu_principal")]])
+        hoje_str = datetime.date.today().strftime("%Y-%m-%d")
         await query.edit_message_text(
-            build_pedidos_dia_text(hoje),
+            build_pedidos_historico_text(hoje_str),
             parse_mode="HTML",
-            reply_markup=kb_vol
+            reply_markup=_nav_keyboard("pedidos_dia_", hoje_str, "admin_menu_principal")
+        )
+
+    elif query.data.startswith("pedidos_dia_"):
+        if not is_admin(query.from_user.id):
+            await query.answer("❌ Acesso negado.", show_alert=True); return
+        data_str = query.data[len("pedidos_dia_"):]
+        try:
+            datetime.datetime.strptime(data_str, "%Y-%m-%d")
+        except ValueError:
+            await query.answer("Data inválida.", show_alert=True); return
+        await query.edit_message_text(
+            build_pedidos_historico_text(data_str),
+            parse_mode="HTML",
+            reply_markup=_nav_keyboard("pedidos_dia_", data_str, "admin_menu_principal")
         )
 
     elif query.data == "caixa":
-        hoje = datetime.date.today().strftime("%Y-%m-%d")
-        conn = get_db()
-        c = conn.cursor()
-        c.execute("SELECT tipo, SUM(valor) FROM caixa WHERE data LIKE ? GROUP BY tipo", (f"{hoje}%",))
-        rows = c.fetchall()
-        c.execute("SELECT SUM(CASE WHEN tipo='entrada' THEN valor ELSE -valor END) FROM caixa WHERE data LIKE ?",
-                  (f"{hoje}%",))
-        saldo_dia = c.fetchone()[0] or 0
-        conn.close()
-        saldo_banco = get_config("saldo_banco")
-        msg = "💰 <b>CAIXA DO DIA</b>\n━━━━━━━━━━━━━━\n\n"
-        for tipo, total in rows:
-            emoji = "📥" if tipo == "entrada" else "📤"
-            msg += f"{emoji} {'Entradas' if tipo == 'entrada' else 'Saídas'}: R$ {total:.2f}\n"
-        msg += f"\n💵 <b>Saldo do Dia: R$ {saldo_dia:.2f}</b>\n"
-        msg += f"🏦 <b>Saldo Banco: R$ {saldo_banco:.2f}</b>"
-        voltar = "admin_menu_principal" if is_admin(query.from_user.id) else "socio_menu_principal"
-        kb_vol = InlineKeyboardMarkup([[InlineKeyboardButton("← Menu", callback_data=voltar)]])
-        await query.edit_message_text(msg, parse_mode="HTML", reply_markup=kb_vol)
+        voltar   = "admin_menu_principal" if is_admin(query.from_user.id) else "socio_menu_principal"
+        hoje_str = datetime.date.today().strftime("%Y-%m-%d")
+        await query.edit_message_text(
+            build_caixa_historico_text(hoje_str),
+            parse_mode="HTML",
+            reply_markup=_nav_keyboard("caixa_dia_", hoje_str, voltar)
+        )
+
+    elif query.data.startswith("caixa_dia_"):
+        voltar   = "admin_menu_principal" if is_admin(query.from_user.id) else "socio_menu_principal"
+        data_str = query.data[len("caixa_dia_"):]
+        try:
+            datetime.datetime.strptime(data_str, "%Y-%m-%d")
+        except ValueError:
+            await query.answer("Data inválida.", show_alert=True); return
+        await query.edit_message_text(
+            build_caixa_historico_text(data_str),
+            parse_mode="HTML",
+            reply_markup=_nav_keyboard("caixa_dia_", data_str, voltar)
+        )
 
     elif query.data == "relatorio":
         if not is_admin(query.from_user.id) and not is_entregador(query.from_user):
