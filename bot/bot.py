@@ -727,6 +727,24 @@ async def handle_comprovante(update: Update, context: ContextTypes.DEFAULT_TYPE)
         reply_markup=keyboard
     )
 
+    # Notificar entregador que um pedido entrou (aguardando confirmação)
+    try:
+        await context.bot.send_message(
+            chat_id=ENTREGADOR_USERNAME,
+            text=(
+                f"📥 <b>PEDIDO RECEBIDO</b>\n"
+                f"━━━━━━━━━━━━━━\n"
+                f"👤 Cliente: {pedido['nome_cliente']}\n"
+                f"📱 Contato: {contato}\n\n"
+                f"{itens_str}\n\n"
+                f"💰 Total: R$ {pedido['total']:.2f}\n\n"
+                f"⏳ Aguardando confirmação do pagamento..."
+            ),
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logging.warning(f"Não foi possível notificar entregador (entrada): {e}")
+
     await update.message.reply_text(
         "✅ <b>Comprovante recebido!</b>\n\n"
         "Aguarde a confirmação do pagamento.\n"
