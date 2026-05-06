@@ -266,6 +266,48 @@ def build_estoque_text():
         texto += f"{estoque_emoji(qtd)} {nome}: <b>{qtd:.1f}</b> | R$ {preco:.2f}/un\n"
     return texto
 
+def build_pedidos_dia_text(hoje: str) -> str:
+    hoje_fmt = datetime.datetime.strptime(hoje, "%Y-%m-%d").strftime("%d/%m/%Y")
+    conn = get_db(); c = conn.cursor()
+    c.execute("""
+        SELECT id, numero, cliente, total, pagamento, data, endereco, data_entrega
+        FROM pedidos
+        WHERE data LIKE ? AND status != 'CANCELADO'
+        ORDER BY id ASC
+    """, (f"{hoje}%",))
+    pedidos = c.fetchall()
+    total_geral = 0
+    linhas = []
+    for ped_id, numero, cliente, total, pagamento, data_ped, endereco, data_entrega in pedidos:
+        hora = data_ped[11:16] if len(data_ped) > 10 else "?"
+        total_geral += total or 0
+        c.execute("SELECT produto, quantidade FROM itens_pedido WHERE pedido_id=?", (ped_id,))
+        itens_rows = c.fetchall()
+        itens_str = "  ".join(
+            f"{PRODUTOS_INFO[p][0]}×{int(q)}" if p in PRODUTOS_INFO else f"{p}×{int(q)}"
+            for p, q in itens_rows
+        )
+        end_str = f"\n    📍 {endereco}" if endereco and endereco not in ("", "Retirada") else ("  🏪 Retirada" if endereco == "Retirada" else "")
+        ag_str  = f"  📅 ent. {datetime.datetime.strptime(data_entrega,'%Y-%m-%d').strftime('%d/%m')}" if data_entrega and data_entrega != hoje else ""
+        pag_emoji = "📲" if pagamento == "PIX" else "💵"
+        linhas.append(
+            f"🕐 <b>{hora}</b>  #{numero}  {pag_emoji} R$ {total:.0f}{ag_str}\n"
+            f"    👤 {cliente}  |  {itens_str}{end_str}"
+        )
+    saldo_banco = get_config("saldo_banco")
+    conn.close()
+    if not pedidos:
+        corpo = "\n<i>Nenhum pedido hoje.</i>\n"
+    else:
+        corpo = "\n" + "\n\n".join(linhas) + "\n"
+    msg  = f"📋 <b>PEDIDOS DO DIA</b> — {hoje_fmt}\n"
+    msg += f"━━━━━━━━━━━━━━━━━━\n"
+    msg += corpo
+    msg += f"━━━━━━━━━━━━━━━━━━\n"
+    msg += f"🧾 <b>{len(pedidos)} pedido(s)</b>  |  💰 <b>R$ {total_geral:.0f}</b>\n"
+    msg += f"🏦 <b>Saldo Banco: R$ {saldo_banco:.2f}</b>"
+    return msg
+
 def build_relatorio_text(hoje):
     hoje_fmt = datetime.datetime.strptime(hoje, "%Y-%m-%d").strftime("%d/%m/%Y")
     conn = get_db()
@@ -321,12 +363,13 @@ def build_relatorio_text(hoje):
 def main_keyboard():
     loja_btn = "🔴 Fechar Loja" if loja_esta_aberta() else "🟢 Abrir Loja"
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📋 Novo Pedido",        callback_data="novo_pedido"),
-         InlineKeyboardButton("📦 Estoque",             callback_data="estoque")],
-        [InlineKeyboardButton("💰 Caixa do Dia",        callback_data="caixa"),
-         InlineKeyboardButton("📊 Relatório Hoje",      callback_data="relatorio")],
+        [InlineKeyboardButton("📋 Novo Pedido",         callback_data="novo_pedido"),
+         InlineKeyboardButton("📦 Estoque",              callback_data="estoque")],
+        [InlineKeyboardButton("🗒️ Pedidos do Dia",      callback_data="pedidos_dia"),
+         InlineKeyboardButton("💰 Caixa do Dia",        callback_data="caixa")],
+        [InlineKeyboardButton("📊 Relatório Hoje",      callback_data="relatorio"),
+         InlineKeyboardButton("💸 Financeiro",          callback_data="admin_menu_financeiro")],
         [InlineKeyboardButton("🏪 Gestão de Estoque",  callback_data="admin_menu_estoque")],
-        [InlineKeyboardButton("💸 Financeiro",          callback_data="admin_menu_financeiro")],
         [InlineKeyboardButton("📢 Broadcast",          callback_data="admin_broadcast"),
          InlineKeyboardButton(loja_btn,                callback_data="admin_toggle_loja")],
         [InlineKeyboardButton("❌ Cancelar Último Pedido", callback_data="admin_cancelar")],
@@ -872,6 +915,17 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         kb_vol = InlineKeyboardMarkup([[InlineKeyboardButton("← Menu", callback_data=voltar)]])
         await query.edit_message_text(build_estoque_text(), parse_mode="HTML", reply_markup=kb_vol)
 
+    elif query.data == "pedidos_dia":
+        if not is_admin(query.from_user.id):
+            await query.answer("❌ Acesso negado.", show_alert=True); return
+        hoje = datetime.date.today().strftime("%Y-%m-%d")
+        kb_vol = InlineKeyboardMarkup([[InlineKeyboardButton("← Menu", callback_data="admin_menu_principal")]])
+        await query.edit_message_text(
+            build_pedidos_dia_text(hoje),
+            parse_mode="HTML",
+            reply_markup=kb_vol
+        )
+
     elif query.data == "caixa":
         hoje = datetime.date.today().strftime("%Y-%m-%d")
         conn = get_db()
@@ -880,12 +934,15 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         rows = c.fetchall()
         c.execute("SELECT SUM(CASE WHEN tipo='entrada' THEN valor ELSE -valor END) FROM caixa WHERE data LIKE ?",
                   (f"{hoje}%",))
-        saldo = c.fetchone()[0] or 0
+        saldo_dia = c.fetchone()[0] or 0
         conn.close()
+        saldo_banco = get_config("saldo_banco")
         msg = "💰 <b>CAIXA DO DIA</b>\n━━━━━━━━━━━━━━\n\n"
         for tipo, total in rows:
-            msg += f"{'Entradas' if tipo == 'entrada' else 'Saídas'}: R$ {total:.2f}\n"
-        msg += f"\n<b>Saldo: R$ {saldo:.2f}</b>"
+            emoji = "📥" if tipo == "entrada" else "📤"
+            msg += f"{emoji} {'Entradas' if tipo == 'entrada' else 'Saídas'}: R$ {total:.2f}\n"
+        msg += f"\n💵 <b>Saldo do Dia: R$ {saldo_dia:.2f}</b>\n"
+        msg += f"🏦 <b>Saldo Banco: R$ {saldo_banco:.2f}</b>"
         voltar = "admin_menu_principal" if is_admin(query.from_user.id) else "socio_menu_principal"
         kb_vol = InlineKeyboardMarkup([[InlineKeyboardButton("← Menu", callback_data=voltar)]])
         await query.edit_message_text(msg, parse_mode="HTML", reply_markup=kb_vol)
@@ -930,8 +987,19 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "admin_menu_principal":
         if not is_admin(query.from_user.id):
             await query.answer("❌ Acesso negado.", show_alert=True); return
+        hoje = datetime.date.today().strftime("%Y-%m-%d")
+        conn = get_db(); c = conn.cursor()
+        c.execute("SELECT COUNT(*), COALESCE(SUM(total),0) FROM pedidos WHERE data LIKE ? AND status!='CANCELADO'", (f"{hoje}%",))
+        qtd_hoje, total_hoje = c.fetchone()
+        conn.close()
+        saldo = get_config("saldo_banco")
+        loja_status = "🟢 Aberta" if loja_esta_aberta() else "🔴 Fechada"
         await query.edit_message_text(
-            "🍪 <b>COOKIE CONTROL PRO</b>\n━━━━━━━━━━━━━━━━━━\nPainel do Administrador",
+            f"🍪 <b>COOKIE CONTROL PRO</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"🏪 Loja: {loja_status}\n"
+            f"📋 Pedidos hoje: <b>{qtd_hoje}</b>  |  💰 <b>R$ {total_hoje:.0f}</b>\n"
+            f"🏦 Saldo Banco: <b>R$ {saldo:.2f}</b>",
             parse_mode="HTML", reply_markup=main_keyboard())
 
     elif query.data == "admin_menu_estoque":
