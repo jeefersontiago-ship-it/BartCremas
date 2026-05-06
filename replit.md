@@ -26,14 +26,20 @@ A Telegram bot for tracking cookie flavor inventory — deduct stock by sending 
 
 ## Product
 
-Telegram bot that tracks cookie flavor inventory:
-- **I** = Ice o Lator
-- **P** = Pak
-- **C** = Crumble
-- **VP** = Pod THC
+Telegram bot for cannabis inventory + ordering:
+- **ICE** = Ice o Lator | **PAK** = Pak | **CRUMBLE** = Crumble | **POD** = Pod THC
 
-Commands: `/start`, `/estoque` (view stock), `/add <sabor> <qtd>` (restock)
-Messages: `<sabor> <qtd>` (deduct stock)
+**Admin menu (owner only):**
+- 📋 Novo Pedido / 📦 Estoque / 💰 Caixa / 📊 Relatório Hoje
+- 🏪 Gestão de Estoque → ➕ Adicionar / ➖ Remover (guided input)
+- 💸 Financeiro → Retirada RD/Bart, Saída Caixa, Saldo Banco, Dívida Fornecedor, Relatório por Data, Reset Dia/Completo
+- ❌ Cancelar Último Pedido (with confirmation)
+
+**Customer flow:** cart → PIX → photo comprovante → admin confirms → entregador notified
+
+**Entregador (@jRDG7):** delivery notifications only — zero access to admin features
+
+Commands still available: `/start`, `/relatorio [date]`, `/fechamento`, `/cancelar`, `/resetdia`, `/resetcompleto`, `/add`, `/remover`, `/saida`, `/rd`, `/bart`, `/banco`, `/fornecedor`
 
 ## User preferences
 
