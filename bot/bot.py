@@ -3,7 +3,8 @@ import sqlite3
 import datetime
 import re
 import os
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+import json
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
     filters, ContextTypes, CallbackQueryHandler
@@ -32,6 +33,20 @@ PRODUTOS_INFO = {
 
 def is_admin(user_id):
     return ADMIN_ID != 0 and user_id == ADMIN_ID
+
+FOTOS_PATH = os.path.join(os.path.dirname(__file__), "fotos.json")
+
+def load_fotos() -> dict:
+    if os.path.exists(FOTOS_PATH):
+        with open(FOTOS_PATH) as f:
+            return json.load(f)
+    return {}
+
+def save_foto(cod: str, file_id: str):
+    fotos = load_fotos()
+    fotos[cod] = file_id
+    with open(FOTOS_PATH, "w") as f:
+        json.dump(fotos, f)
 
 # ====================== BANCO ======================
 
@@ -253,6 +268,7 @@ def admin_estoque_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("➕ Adicionar Estoque",  callback_data="admin_add"),
          InlineKeyboardButton("➖ Remover Estoque",    callback_data="admin_rem")],
+        [InlineKeyboardButton("📸 Fotos dos Produtos", callback_data="admin_foto_produtos")],
         [InlineKeyboardButton("← Voltar ao Menu",      callback_data="admin_menu_principal")],
     ])
 
@@ -649,7 +665,28 @@ async def salvar_pedido_guiado(update: Update, context: ContextTypes.DEFAULT_TYP
 # ====================== COMPROVANTE PIX (CLIENTE) ======================
 
 async def handle_comprovante(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.user_data.get("estado") != "cliente_comprovante":
+    estado = context.user_data.get("estado", "")
+
+    # ---- Admin: salvar foto de produto ----
+    if isinstance(estado, str) and estado.startswith("admin_foto_"):
+        if not is_admin(update.effective_user.id):
+            return
+        cod     = estado[len("admin_foto_"):]
+        file_id = update.message.photo[-1].file_id
+        save_foto(cod, file_id)
+        nome = PRODUTOS_INFO.get(cod, (cod,))[0]
+        context.user_data["estado"] = None
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📸 Enviar outra foto", callback_data="admin_foto_produtos")],
+            [InlineKeyboardButton("← Gestão de Estoque",  callback_data="admin_menu_estoque")],
+        ])
+        await update.message.reply_text(
+            f"✅ Foto de <b>{nome}</b> salva com sucesso!",
+            parse_mode="HTML", reply_markup=kb)
+        return
+
+    # ---- Cliente: comprovante de pagamento ----
+    if estado != "cliente_comprovante":
         return
     pedido = context.user_data.get("pedido_pendente")
     if not pedido:
@@ -784,6 +821,35 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🔢 #{numero}  👤 {cliente}\n💰 R$ {total:.2f}  🕐 {data}",
             parse_mode="HTML", reply_markup=kb)
 
+    elif query.data == "admin_foto_produtos":
+        if not is_admin(query.from_user.id):
+            await query.answer("❌ Acesso negado.", show_alert=True); return
+        fotos = load_fotos()
+        rows  = []
+        for cod, (nome, _, _) in PRODUTOS_INFO.items():
+            tem = "✅ " if cod in fotos else "📸 "
+            rows.append([InlineKeyboardButton(f"{tem}{nome}", callback_data=f"admin_foto_pick_{cod}")])
+        rows.append([InlineKeyboardButton("← Voltar", callback_data="admin_menu_estoque")])
+        await query.edit_message_text(
+            "📸 <b>Fotos dos Produtos</b>\n━━━━━━━━━━━━━━━━━━\n"
+            "✅ = foto cadastrada   📸 = sem foto\n\n"
+            "Toque no produto para enviar/trocar a foto:",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(rows))
+
+    elif query.data.startswith("admin_foto_pick_"):
+        if not is_admin(query.from_user.id):
+            await query.answer("❌ Acesso negado.", show_alert=True); return
+        cod  = query.data[len("admin_foto_pick_"):]
+        nome = PRODUTOS_INFO.get(cod, (cod,))[0]
+        context.user_data["estado"] = f"admin_foto_{cod}"
+        await query.edit_message_text(
+            f"📸 <b>{nome}</b>\n\nEnvie a foto deste produto agora:",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("✖ Cancelar", callback_data="admin_foto_produtos")
+            ]]))
+
     # --- Inputs guiados ---
     elif query.data in ("admin_add", "admin_rem", "admin_rd_input", "admin_bart_input",
                         "admin_saida_input", "admin_banco_input", "admin_fornecedor_input",
@@ -915,18 +981,29 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         c.execute("SELECT codigo, nome, preco_venda, estoque FROM produtos ORDER BY codigo")
         rows = c.fetchall()
         conn.close()
-        msg = "📦  <b>CARDÁPIO</b>\n━━━━━━━━━━━━━━━━━━\n\n"
+        fotos   = load_fotos()
+        media   = []
+        sem_foto = ""
         for cod, nome, preco, estoque in rows:
             if cod not in PRODUTOS_INFO:
                 continue
             unidade = PRODUTOS_INFO[cod][2]
             status  = "🟢" if estoque > 0 else "🔴 esgotado"
-            msg += f"{status}  {nome}\n    R$ {preco:.0f}/{unidade}\n\n"
+            if cod in fotos:
+                caption = f"{status}  <b>{nome}</b>\n💰 R$ {preco:.0f}/{unidade}"
+                media.append(InputMediaPhoto(fotos[cod], caption=caption, parse_mode="HTML"))
+            else:
+                sem_foto += f"{status}  {nome}\n    R$ {preco:.0f}/{unidade}\n\n"
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("🛒  pedir agora", callback_data="loja_iniciar")],
             [InlineKeyboardButton("← voltar",        callback_data="loja_menu")],
         ])
-        await query.edit_message_text(msg, parse_mode="HTML", reply_markup=kb)
+        if media:
+            await context.bot.send_media_group(chat_id=query.message.chat_id, media=media)
+        header = "📦  <b>CARDÁPIO</b>\n━━━━━━━━━━━━━━━━━━\n\n"
+        await query.edit_message_text(
+            header + sem_foto if sem_foto else header.rstrip(),
+            parse_mode="HTML", reply_markup=kb)
 
     elif query.data.startswith("loja_add_") or query.data.startswith("loja_rem_"):
         parts    = query.data.split("_")
