@@ -295,23 +295,27 @@ def build_cart_text(carrinho: dict) -> str:
     linhas += f"💸  <b>Total: R$ {total:.0f}</b>"
     return linhas
 
+NOMES_CURTOS = {
+    "ICE":     "🍦 Ice Cream Cake",
+    "PAK":     "🥐 Pak Nutella",
+    "CRUMBLE": "🍪 Crumble",
+    "POD_I":   "🪦 Indica",
+    "POD_S":   "🌿 Sativa",
+}
+
 def build_cart_keyboard(carrinho: dict) -> InlineKeyboardMarkup:
     rows = []
     for cod, (nome, preco, unidade) in PRODUTOS_INFO.items():
-        qtd = carrinho.get(cod, 0)
-        label_qtd = f"{'🔥 ' if qtd > 0 else ''}{qtd} {unidade}"
+        qtd    = carrinho.get(cod, 0)
+        label  = NOMES_CURTOS.get(cod, nome)
+        centro = f"🔥 ×{qtd}" if qtd > 0 else f"· {unidade} ·"
         rows.append([
-            InlineKeyboardButton(f"➖", callback_data=f"loja_rem_{cod}"),
-            InlineKeyboardButton(label_qtd,  callback_data="noop"),
-            InlineKeyboardButton(f"➕", callback_data=f"loja_add_{cod}"),
-            InlineKeyboardButton(f"{nome}", callback_data="noop"),
+            InlineKeyboardButton("➖", callback_data=f"loja_rem_{cod}"),
+            InlineKeyboardButton(f"{label}  {centro}", callback_data="noop"),
+            InlineKeyboardButton("➕", callback_data=f"loja_add_{cod}"),
         ])
-    rows.append([
-        InlineKeyboardButton("⚡ fechar pedido", callback_data="loja_confirmar"),
-    ])
-    rows.append([
-        InlineKeyboardButton("✖ cancelar",       callback_data="loja_cancelar"),
-    ])
+    rows.append([InlineKeyboardButton("⚡ fechar pedido", callback_data="loja_confirmar")])
+    rows.append([InlineKeyboardButton("✖ cancelar",       callback_data="loja_cancelar")])
     return InlineKeyboardMarkup(rows)
 
 # ====================== COMANDOS ======================
@@ -932,7 +936,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data.startswith("loja_add_") or query.data.startswith("loja_rem_"):
         parts    = query.data.split("_")
         action   = parts[1]
-        cod      = parts[2]
+        cod      = "_".join(parts[2:])   # reconstrói POD_I, POD_S corretamente
         carrinho = context.user_data.get("carrinho", {c: 0 for c in PRODUTOS_INFO})
         if action == "add":
             conn = get_db()
