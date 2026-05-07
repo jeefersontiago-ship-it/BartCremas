@@ -1125,10 +1125,7 @@ def customer_keyboard():
 def socio_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🚚 Minhas Entregas Pendentes", callback_data="socio_entregas_pendentes")],
-        [InlineKeyboardButton("📋 Todos os Pedidos do Dia",   callback_data="socio_pedidos")],
-        [InlineKeyboardButton("📦 Estoque",                   callback_data="estoque"),
-         InlineKeyboardButton("💰 Caixa do Dia",             callback_data="caixa")],
-        [InlineKeyboardButton("📊 Relatório Hoje",            callback_data="relatorio")],
+        [InlineKeyboardButton("📋 Pedidos do Dia",            callback_data="socio_pedidos")],
         [InlineKeyboardButton("🛍️  Cardápio",                 callback_data="loja_produtos")],
     ])
 
@@ -1209,9 +1206,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 async def cmd_estoque(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Acesso negado.")
+        return
     await update.message.reply_text(build_estoque_text(), parse_mode="HTML")
 
 async def cmd_caixa(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Acesso negado.")
+        return
     hoje = datetime.date.today().strftime("%Y-%m-%d")
     conn = get_db()
     c = conn.cursor()
@@ -1636,7 +1639,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("👤 Digite o nome do cliente:")
 
     elif query.data == "estoque":
-        voltar = "admin_menu_principal" if is_admin(query.from_user.id) else "socio_menu_principal"
+        if not is_admin(query.from_user.id):
+            await query.answer("❌ Acesso negado.", show_alert=True); return
+        voltar = "admin_menu_principal"
         hoje_str = datetime.date.today().strftime("%Y-%m-%d")
         await query.edit_message_text(
             build_estoque_historico_text(hoje_str),
@@ -1645,8 +1650,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     elif query.data.startswith("estoque_dia_"):
+        if not is_admin(query.from_user.id):
+            await query.answer("❌ Acesso negado.", show_alert=True); return
         data_str = query.data[len("estoque_dia_"):]
-        voltar   = "admin_menu_principal" if is_admin(query.from_user.id) else "socio_menu_principal"
+        voltar   = "admin_menu_principal"
         try:
             datetime.datetime.strptime(data_str, "%Y-%m-%d")
         except ValueError:
@@ -1682,16 +1689,19 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     elif query.data == "caixa":
-        voltar   = "admin_menu_principal" if is_admin(query.from_user.id) else "socio_menu_principal"
+        if not is_admin(query.from_user.id):
+            await query.answer("❌ Acesso negado.", show_alert=True); return
         hoje_str = datetime.date.today().strftime("%Y-%m-%d")
         await query.edit_message_text(
             build_caixa_historico_text(hoje_str),
             parse_mode="HTML",
-            reply_markup=_nav_keyboard("caixa_dia_", hoje_str, voltar)
+            reply_markup=_nav_keyboard("caixa_dia_", hoje_str, "admin_menu_principal")
         )
 
     elif query.data.startswith("caixa_dia_"):
-        voltar   = "admin_menu_principal" if is_admin(query.from_user.id) else "socio_menu_principal"
+        if not is_admin(query.from_user.id):
+            await query.answer("❌ Acesso negado.", show_alert=True); return
+        voltar   = "admin_menu_principal"
         data_str = query.data[len("caixa_dia_"):]
         try:
             datetime.datetime.strptime(data_str, "%Y-%m-%d")
@@ -1704,30 +1714,27 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     elif query.data == "relatorio":
-        if not is_admin(query.from_user.id) and not is_entregador(query.from_user):
-            await query.edit_message_text("❌ Acesso negado.")
-            return
+        if not is_admin(query.from_user.id):
+            await query.answer("❌ Acesso negado.", show_alert=True); return
         hoje_str = datetime.date.today().strftime("%Y-%m-%d")
-        voltar   = "admin_menu_principal" if is_admin(query.from_user.id) else "socio_menu_principal"
         await query.edit_message_text(
             build_relatorio_historico_text(hoje_str),
             parse_mode="HTML",
-            reply_markup=_nav_keyboard("relatorio_dia_", hoje_str, voltar)
+            reply_markup=_nav_keyboard("relatorio_dia_", hoje_str, "admin_menu_principal")
         )
 
     elif query.data.startswith("relatorio_dia_"):
-        if not is_admin(query.from_user.id) and not is_entregador(query.from_user):
+        if not is_admin(query.from_user.id):
             await query.answer("❌ Acesso negado.", show_alert=True); return
         data_str = query.data[len("relatorio_dia_"):]
         try:
             datetime.datetime.strptime(data_str, "%Y-%m-%d")
         except ValueError:
             await query.answer("Data inválida.", show_alert=True); return
-        voltar = "admin_menu_principal" if is_admin(query.from_user.id) else "socio_menu_principal"
         await query.edit_message_text(
             build_relatorio_historico_text(data_str),
             parse_mode="HTML",
-            reply_markup=_nav_keyboard("relatorio_dia_", data_str, voltar)
+            reply_markup=_nav_keyboard("relatorio_dia_", data_str, "admin_menu_principal")
         )
 
     # ====================== MENU ADMIN ======================
