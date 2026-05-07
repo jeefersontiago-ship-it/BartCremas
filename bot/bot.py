@@ -919,8 +919,9 @@ def main_keyboard():
 
 def admin_estoque_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ Adicionar Estoque",  callback_data="admin_add"),
-         InlineKeyboardButton("➖ Remover Estoque",    callback_data="admin_rem")],
+        [InlineKeyboardButton("➕ Adicionar",          callback_data="admin_add"),
+         InlineKeyboardButton("➖ Remover",            callback_data="admin_rem")],
+        [InlineKeyboardButton("📝 Definir Quantidade", callback_data="admin_definir")],
         [InlineKeyboardButton("📸 Fotos dos Produtos", callback_data="admin_foto_produtos")],
         [InlineKeyboardButton("← Voltar ao Menu",      callback_data="admin_menu_principal")],
     ])
@@ -2019,7 +2020,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ])
         await query.edit_message_text(build_retiradas_socio_text("RD"), parse_mode="HTML", reply_markup=kb)
 
-    elif query.data in ("admin_add", "admin_rem", "admin_rd_input", "admin_bart_input",
+    elif query.data in ("admin_add", "admin_rem", "admin_definir", "admin_rd_input", "admin_bart_input",
                         "retiradas_bart_input", "retiradas_rd_input",
                         "admin_saida_input", "admin_banco_input", "admin_fornecedor_input",
                         "admin_relatorio_data"):
@@ -2027,8 +2028,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("❌ Acesso negado.", show_alert=True); return
         # retiradas_bart_input / retiradas_rd_input are handled separately below
         prompts = {
-            "admin_add":             ("admin_add",        "➕ <b>Adicionar Estoque</b>\n\nDigite o produto e quantidade:\n<code>ICE 50</code>  ou  <code>PAK 20</code>", "admin_menu_principal"),
-            "admin_rem":             ("admin_rem",        "➖ <b>Remover Estoque</b>\n\nDigite o produto e quantidade:\n<code>ICE 10</code>  ou  <code>PAK 5</code>",  "admin_menu_principal"),
+            "admin_add":             ("admin_add",     "➕ <b>Adicionar Estoque</b>\n\nDigite o produto e quantidade:\n<code>ICE 50</code>  ou  <code>PAK 20</code>", "admin_menu_estoque"),
+            "admin_rem":             ("admin_rem",     "➖ <b>Remover Estoque</b>\n\nDigite o produto e quantidade:\n<code>ICE 10</code>  ou  <code>PAK 5</code>",  "admin_menu_estoque"),
+            "admin_definir":         ("admin_definir", "📝 <b>Definir Quantidade Exata</b>\n\nDigite o produto e a quantidade correta:\n<code>ICE 30</code>  ou  <code>PAK 15</code>\n\n⚠️ Isso substitui o valor atual.", "admin_menu_estoque"),
             "admin_rd_input":        ("admin_rd",         "👤 <b>Retirada RD</b>\n\nDigite o valor:\n<code>500</code>",                                                "retiradas_rd"),
             "admin_bart_input":      ("admin_bart",       "👤 <b>Retirada Bart</b>\n\nDigite o valor:\n<code>500</code>",                                              "retiradas_bart"),
             "retiradas_rd_input":    ("admin_rd",         "👤 <b>Retirada RD</b>\n\nDigite o valor:\n<code>500</code>",                                                "retiradas_rd"),
@@ -3090,7 +3092,7 @@ async def processar_mensagem(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     # ====================== ESTADOS ADMIN GUIADOS ======================
 
-    ADMIN_ESTADOS = ("admin_add", "admin_rem", "admin_rd", "admin_bart",
+    ADMIN_ESTADOS = ("admin_add", "admin_rem", "admin_definir", "admin_rd", "admin_bart",
                      "admin_saida", "admin_banco", "admin_fornecedor", "admin_rel_data", "admin_broadcast")
 
     if estado in ADMIN_ESTADOS:
@@ -3138,6 +3140,33 @@ async def processar_mensagem(update: Update, context: ContextTypes.DEFAULT_TYPE)
                         return
                     except ValueError: pass
             await update.message.reply_text("❌ Formato inválido. Ex: <code>ICE 10</code>", parse_mode="HTML")
+
+        elif estado == "admin_definir":
+            partes = texto.upper().split()
+            if len(partes) == 2:
+                cod = ALIAS.get(partes[0], partes[0])
+                if cod in CODIGOS:
+                    try:
+                        qtd = float(partes[1].replace(",", "."))
+                        if qtd < 0:
+                            await update.message.reply_text("❌ Quantidade não pode ser negativa.", parse_mode="HTML")
+                            return
+                        conn = get_db(); c = conn.cursor()
+                        c.execute("SELECT estoque, nome FROM produtos WHERE codigo = ?", (cod,))
+                        anterior, nome = c.fetchone()
+                        c.execute("UPDATE produtos SET estoque = ? WHERE codigo = ?", (qtd, cod))
+                        conn.commit(); conn.close()
+                        diff = qtd - anterior
+                        diff_str = f"+{diff:.1f}" if diff >= 0 else f"{diff:.1f}"
+                        aviso = "\n🚨 <b>ESTOQUE ZERADO!</b>" if qtd == 0 else ("\n⚠️ <b>Estoque baixo!</b>" if qtd <= 20 else "")
+                        context.user_data["estado"] = None
+                        await update.message.reply_text(
+                            f"✅ <b>{nome}</b> definido para <b>{qtd:.1f}</b>\n"
+                            f"📊 Anterior: {anterior:.1f}  →  Agora: {qtd:.1f}  ({diff_str}){aviso}",
+                            parse_mode="HTML", reply_markup=kb_menu)
+                        return
+                    except ValueError: pass
+            await update.message.reply_text("❌ Formato inválido. Ex: <code>ICE 30</code>", parse_mode="HTML")
 
         elif estado == "admin_rd":
             try:
@@ -3281,76 +3310,9 @@ async def processar_mensagem(update: Update, context: ContextTypes.DEFAULT_TYPE)
             return
         return
 
-    # --- Parser de pedido colado (requer "pedido" ou "total") ---
-    if not re.search(r'pedido|total', texto, re.IGNORECASE):
-        return
-
-    try:
-        numero_match = re.search(r'pedido\s*(\d+)', lines[0], re.IGNORECASE)
-        numero      = numero_match.group(1) if numero_match else datetime.datetime.now().strftime("%d%H%M")
-        cliente     = lines[1] if len(lines) > 1 else "Desconhecido"
-        itens       = {}
-        total       = 0.0
-        taxa        = 0.0
-        pagamento   = "PIX"
-        responsavel = "Não informado"
-
-        for line in lines:
-            line_u = line.upper()
-            for prod in ["ICE", "PAK", "CRUMBLE", "POD_I", "POD_S"]:
-                if prod in line_u:
-                    q = re.search(r'(\d+(?:[.,]\d+)?)', line.replace(",", "."))
-                    if q:
-                        itens[prod] = itens.get(prod, 0) + float(q.group(1))
-            if any(x in line_u for x in ["TOTAL", "R$"]):
-                v = re.search(r'(\d+(?:[.,]\d+)?)', line.replace(",", "."))
-                if v: total = float(v.group(1))
-            if "TAXA" in line_u:
-                v = re.search(r'(\d+(?:[.,]\d+)?)', line.replace(",", "."))
-                if v: taxa = float(v.group(1))
-            if any(x in line_u for x in ["DINHEIRO", "GRANA", "ESPECIE", "ESPÉCIE"]):
-                pagamento = "DINHEIRO"
-            elif "PIX" in line_u:
-                pagamento = "PIX"
-            if "RESPONSAVEL" in line_u or "RESPONSÁVEL" in line_u:
-                responsavel = line.split(":", 1)[-1].strip()
-            elif any(x in line_u for x in ["RD", "BART"]) and ":" in line:
-                responsavel = line.split(":", 1)[-1].strip()
-
-        if total <= 0:
-            await update.message.reply_text(
-                "❌ Informe o Total.\nEx: <code>Total: R$ 440</code>", parse_mode="HTML")
-            return
-
-        conn = get_db()
-        c = conn.cursor()
-        data = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-        c.execute(
-            "INSERT INTO pedidos (numero, cliente, total, taxa, pagamento, responsavel, data, status) VALUES (?,?,?,?,?,?,?,?)",
-            (numero, cliente, total, taxa, pagamento, responsavel, data, "OK"))
-        pedido_id = c.lastrowid
-        for prod, qtd in itens.items():
-            c.execute("INSERT INTO itens_pedido VALUES (?,?,?)", (pedido_id, prod, qtd))
-            c.execute("UPDATE produtos SET estoque = estoque - ? WHERE codigo = ?", (qtd, prod))
-        conn.commit()
-        conn.close()
-
-        registrar_caixa("entrada", total, f"Pedido #{numero} - {cliente}")
-
-        pag_emoji = "📲" if pagamento == "PIX" else "💵"
-        itens_str = "\n".join(f"   • {k}: {v:.1f}" for k, v in itens.items()) or "   (nenhum item)"
-        await update.message.reply_text(
-            f"✅ <b>Pedido #{numero} registrado!</b>\n"
-            f"👤 {cliente}\n{itens_str}\n"
-            f"💰 R$ {total:.2f} {pag_emoji} {pagamento}\n"
-            f"👷 {responsavel}",
-            parse_mode="HTML")
-
-    except Exception as e:
-        logging.error(f"Erro ao processar pedido: {e}")
-        await update.message.reply_text(
-            f"❌ Erro ao processar. Verifique o formato.\n\n<code>{e}</code>",
-            parse_mode="HTML")
+    # Mensagem multilinha do admin → Assistente IA
+    if is_admin(update.effective_user.id):
+        await handle_admin_ai(update, context, texto)
 
 # ====================== JOBS AGENDADOS ======================
 
