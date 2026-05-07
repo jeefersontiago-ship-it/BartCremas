@@ -119,7 +119,12 @@ def init_db():
                  tipo TEXT,
                  valor REAL,
                  descricao TEXT,
+                 pagamento TEXT DEFAULT 'PIX',
                  data TEXT)''')
+    try:
+        c.execute("ALTER TABLE caixa ADD COLUMN pagamento TEXT DEFAULT 'PIX'")
+    except Exception:
+        pass
 
     c.execute('''CREATE TABLE IF NOT EXISTS retiradas (
                  id INTEGER PRIMARY KEY,
@@ -211,12 +216,12 @@ def estoque_emoji(qtd):
     if qtd <= 20: return "⚠️"
     return "✅"
 
-def registrar_caixa(tipo, valor, descricao):
+def registrar_caixa(tipo, valor, descricao, pagamento="PIX"):
     conn = get_db()
     c = conn.cursor()
     data = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    c.execute("INSERT INTO caixa (tipo, valor, descricao, data) VALUES (?,?,?,?)",
-              (tipo, valor, descricao, data))
+    c.execute("INSERT INTO caixa (tipo, valor, descricao, pagamento, data) VALUES (?,?,?,?,?)",
+              (tipo, valor, descricao, pagamento, data))
     if tipo == "entrada":
         c.execute("UPDATE config SET valor = valor + ? WHERE chave = 'saldo_banco'", (valor,))
     else:
@@ -1004,9 +1009,9 @@ def build_saldo_banco_text() -> str:
     divida      = get_config("divida_fornecedor")
     conn = get_db(); c = conn.cursor()
 
-    # Últimas movimentações do caixa (todas, não só hoje)
+    # Últimas movimentações do caixa
     c.execute("""
-        SELECT tipo, valor, descricao, data FROM caixa
+        SELECT tipo, valor, descricao, COALESCE(pagamento,'PIX'), data FROM caixa
         ORDER BY id DESC LIMIT 30
     """)
     movs = c.fetchall()
@@ -1023,6 +1028,26 @@ def build_saldo_banco_text() -> str:
     ent_hoje = c.fetchone()[0]
     c.execute("SELECT COALESCE(SUM(valor),0) FROM caixa WHERE tipo='saida' AND data LIKE ?", (f"{hoje}%",))
     sai_hoje = c.fetchone()[0]
+
+    # Divisão PIX / Dinheiro (total histórico de entradas)
+    c.execute("""
+        SELECT COALESCE(pagamento,'PIX'), COALESCE(SUM(valor),0)
+        FROM caixa WHERE tipo='entrada'
+        GROUP BY COALESCE(pagamento,'PIX')
+    """)
+    pag_rows = dict(c.fetchall())
+    pix_total = pag_rows.get("PIX", 0.0)
+    din_total = pag_rows.get("DINHEIRO", 0.0)
+
+    # Divisão de hoje
+    c.execute("""
+        SELECT COALESCE(pagamento,'PIX'), COALESCE(SUM(valor),0)
+        FROM caixa WHERE tipo='entrada' AND data LIKE ?
+        GROUP BY COALESCE(pagamento,'PIX')
+    """, (f"{hoje}%",))
+    pag_hoje = dict(c.fetchall())
+    pix_hoje = pag_hoje.get("PIX", 0.0)
+    din_hoje = pag_hoje.get("DINHEIRO", 0.0)
     conn.close()
 
     msg  = "🏦 <b>SALDO BANCO</b>\n"
@@ -1032,25 +1057,34 @@ def build_saldo_banco_text() -> str:
         msg += f"📉 Dívida fornecedor: R$ {divida:.0f}\n"
         msg += f"📊 Patrimônio líquido: <b>R$ {saldo_banco - divida:.2f}</b>\n"
     msg += "\n"
-    msg += f"📅 Hoje  ·  📥 +R$ {ent_hoje:.0f}  ·  📤 -R$ {sai_hoje:.0f}\n"
+    msg += f"📅 <b>Hoje</b>  ·  📥 +R$ {ent_hoje:.0f}  ·  📤 -R$ {sai_hoje:.0f}\n"
+    if ent_hoje > 0:
+        if pix_hoje:  msg += f"     📲 PIX: R$ {pix_hoje:.0f}\n"
+        if din_hoje:  msg += f"     💵 Dinheiro: R$ {din_hoje:.0f}\n"
     msg += "\n━━━━━━━━━━━━━━━━━━━━\n"
     msg += "🕐 <b>Últimas movimentações</b>\n\n"
 
     if movs:
-        for tipo, valor, desc, data_raw in movs:
+        for tipo, valor, desc, pag, data_raw in movs:
             try:
-                dt  = datetime.datetime.strptime(data_raw[:10], "%Y-%m-%d").strftime("%d/%m")
+                dt   = datetime.datetime.strptime(data_raw[:10], "%Y-%m-%d").strftime("%d/%m")
                 hora = data_raw[11:16] if len(data_raw) > 10 else ""
                 dt_str = f"{dt} {hora}".strip()
             except Exception:
                 dt_str = data_raw[:16]
-            sinal = "📥 +" if tipo == "entrada" else "📤 -"
+            if tipo == "entrada":
+                pag_icon = "📲" if pag == "PIX" else "💵"
+                sinal = f"📥{pag_icon} +"
+            else:
+                sinal = "📤 -"
             msg += f"  {sinal}R$ {valor:.0f}  <i>{desc}</i>  <code>{dt_str}</code>\n"
     else:
         msg += "  <i>Nenhuma movimentação.</i>\n"
 
     msg += f"\n━━━━━━━━━━━━━━━━━━━━\n"
     msg += f"📥 Total entradas: R$ {tot_ent_all:.0f}\n"
+    if pix_total: msg += f"   📲 PIX: R$ {pix_total:.0f}\n"
+    if din_total: msg += f"   💵 Dinheiro: R$ {din_total:.0f}\n"
     msg += f"📤 Total saídas:   R$ {tot_sai_all:.0f}"
     return msg
 
@@ -1225,9 +1259,25 @@ async def cmd_caixa(update: Update, context: ContextTypes.DEFAULT_TYPE):
               (f"{hoje}%",))
     saldo = c.fetchone()[0] or 0
     conn.close()
+    # Divisão PIX / Dinheiro de hoje
+    conn2 = get_db(); c2 = conn2.cursor()
+    c2.execute("""
+        SELECT COALESCE(pagamento,'PIX'), COALESCE(SUM(valor),0)
+        FROM caixa WHERE tipo='entrada' AND data LIKE ?
+        GROUP BY COALESCE(pagamento,'PIX')
+    """, (f"{hoje}%",))
+    pag_hoje = dict(c2.fetchall())
+    conn2.close()
+
     msg = "💰 <b>CAIXA DO DIA</b>\n━━━━━━━━━━━━━━\n\n"
     for tipo, total in rows:
-        msg += f"{'Entradas' if tipo == 'entrada' else 'Saídas'}: R$ {total:.2f}\n"
+        label = "Entradas" if tipo == "entrada" else "Saídas"
+        msg += f"{label}: R$ {total:.2f}\n"
+        if tipo == "entrada":
+            pix_h = pag_hoje.get("PIX", 0.0)
+            din_h = pag_hoje.get("DINHEIRO", 0.0)
+            if pix_h: msg += f"   📲 PIX: R$ {pix_h:.0f}\n"
+            if din_h: msg += f"   💵 Dinheiro: R$ {din_h:.0f}\n"
     msg += f"\n<b>Saldo: R$ {saldo:.2f}</b>"
     await update.message.reply_text(msg, parse_mode="HTML")
 
@@ -1510,7 +1560,7 @@ async def salvar_pedido_guiado(update: Update, context: ContextTypes.DEFAULT_TYP
     conn.commit()
     conn.close()
 
-    registrar_caixa("entrada", total, f"Pedido #{numero} - {cliente}")
+    registrar_caixa("entrada", total, f"Pedido #{numero} - {cliente}", "PIX")
 
     await update.message.reply_text(
         f"✅ <b>Pedido #{numero} confirmado com sucesso!</b>\n\n"
@@ -2744,7 +2794,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 c.execute("UPDATE produtos SET estoque = estoque - ? WHERE codigo = ?", (qtd, prod))
         conn.commit()
         conn.close()
-        registrar_caixa("entrada", pedido["total"], f"Pedido #{numero} - {pedido['nome_cliente']}")
+        registrar_caixa("entrada", pedido["total"], f"Pedido #{numero} - {pedido['nome_cliente']}", pedido.get("pagamento", "PIX"))
         await check_low_stock(context.bot)
         # Montar strings comuns
         itens_entrega = "\n".join(
@@ -2925,7 +2975,7 @@ Use português. Para perguntas sobre o estado atual, responda com "chat" e o val
         c.execute("SELECT nome FROM produtos WHERE codigo = ?", (prod,))
         nome = c.fetchone()[0]
         conn.commit(); conn.close()
-        registrar_caixa("entrada", valor, f"Pedido #{numero} {pag} (IA)")
+        registrar_caixa("entrada", valor, f"Pedido #{numero} {pag} (IA)", pag)
         await update.message.reply_text(
             f"✅ <b>Venda registrada</b>\n👤 {cliente}\n{qtd:.1f}× {nome}\n💰 R$ {valor:.0f} — {pag}",
             parse_mode="HTML")
