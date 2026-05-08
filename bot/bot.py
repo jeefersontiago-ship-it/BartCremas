@@ -1269,7 +1269,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         registrar_cliente(user.id, user.username or "", user.first_name or "")
         nome_cliente = user.first_name or "cliente"
         aberta       = loja_esta_aberta()
-        await send_welcome_photo(update.message.bot, update.effective_chat.id,
+        await send_welcome_photo(context.bot, update.effective_chat.id,
                                  nome_cliente, aberta)
 
 async def cmd_estoque(update: Update, context: ContextTypes.DEFAULT_TYPE):
