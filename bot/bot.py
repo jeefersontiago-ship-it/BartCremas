@@ -1238,16 +1238,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         hora_info    = "🕐 entregas a partir das 19:30" if aberta else "🕐 abrimos às 08:00"
         nome_cliente = user.first_name or "cliente"
         await update.message.reply_text(
-            f"🌿  <b>G R E E N  H O U S E</b>  🌿\n"
-            f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
-            f"✦ <i>premium  ·  discreto  ·  confiável</i> ✦\n\n"
-            f"Olá, <b>{nome_cliente}</b>! 👋 Seja bem-vindo(a).\n\n"
-            f"<b>Como funciona:</b>\n"
-            f"1️⃣  Toque em <b>Ver Cardápio</b> e conheça nossos produtos\n"
-            f"2️⃣  Toque em <b>Fazer Pedido</b> e monte seu carrinho\n"
-            f"3️⃣  Informe seu endereço ou escolha retirada\n"
-            f"4️⃣  Pague via <b>PIX</b> ou <b>Dinheiro</b>\n"
-            f"5️⃣  Receba em casa rapidinho 🚚\n\n"
+            f"🌿  <b>G R E E N  H O U S E</b>  🌿\n\n"
+            f"<i>Bem-vindo(a), {nome_cliente}.</i>\n\n"
+            f"Qualidade que você sente.\n"
+            f"Entrega que você confia.\n\n"
             f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
             f"{status_icon}  <b>{status_label}</b>  ·  {hora_info}",
             parse_mode="HTML",
@@ -2785,11 +2779,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             status_label2 = "Aberta agora" if aberta2 else "Fechada no momento"
             hora_info2    = "🕐 entregas a partir das 19:30" if aberta2 else "🕐 abrimos às 08:00"
             await query.edit_message_text(
-                "🌿  <b>G R E E N  H O U S E</b>  🌿\n"
+                "🌿  <b>G R E E N  H O U S E</b>  🌿\n\n"
+                f"Qualidade que você sente.\n"
+                f"Entrega que você confia.\n\n"
                 "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
-                "✦ <i>premium  ·  discreto  ·  confiável</i> ✦\n\n"
-                f"{status_icon2}  <b>{status_label2}</b>\n"
-                f"{hora_info2}",
+                f"{status_icon2}  <b>{status_label2}</b>  ·  {hora_info2}",
                 parse_mode="HTML",
                 reply_markup=customer_keyboard()
             )
