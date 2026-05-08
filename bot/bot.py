@@ -1239,7 +1239,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         nome_cliente = user.first_name or "cliente"
         fechada_aviso = "\n📅  <i>Você pode fazer seu pedido agendado para amanhã!</i>" if not aberta else ""
         await update.message.reply_text(
-            f"🌿 <b>GREEN HOUSE</b> · <i>premium · discreto · confiável</i> 🌿\n\n"
+            f"🌿 <b>GREEN HOUSE</b> · <i>natureza · estilo · conexão</i> 🌿\n\n"
             f"<i>Bem-vindo(a),</i> <b>{nome_cliente}</b>\n\n"
             f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
             f"{status_icon} <b>{status_label}</b> · <i>{hora_info}</i>"
@@ -2781,7 +2781,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             hora_info2    = "🕐 entregas a partir das 19:30" if aberta2 else "🕐 abrimos às 08:00"
             fechada_aviso2 = "\n📅  <i>Você pode fazer seu pedido agendado para amanhã!</i>" if not aberta2 else ""
             await query.edit_message_text(
-                "🌿 <b>GREEN HOUSE</b> · <i>premium · discreto · confiável</i> 🌿\n\n"
+                "🌿 <b>GREEN HOUSE</b> · <i>natureza · estilo · conexão</i> 🌿\n\n"
                 f"{status_icon2} <b>{status_label2}</b> · <i>{hora_info2}</i>"
                 f"{fechada_aviso2}",
                 parse_mode="HTML",
