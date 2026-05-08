@@ -2468,11 +2468,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(
             chat_id=query.message.chat_id,
             text=(
-                f"📲 <b>Chave PIX</b>\n"
-                f"<code>{CHAVE_PIX}</code>\n\n"
-                f"👤 <i>Gabriel Graboski</i>\n"
-                f"🏦 <i>Banco Neon</i>"
+                f"📲 <b>Chave PIX</b> · <i>Gabriel Graboski</i> · <i>Banco Neon</i>\n\n"
+                f"👇 <i>Toque para copiar:</i>"
             ),
+            parse_mode="HTML"
+        )
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=f"<code>{CHAVE_PIX}</code>",
             parse_mode="HTML"
         )
 
