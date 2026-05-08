@@ -1214,8 +1214,7 @@ def build_welcome_caption(nome: str, aberta: bool) -> str:
     hora_info    = "entregas a partir das 19:30" if aberta else "abrimos às 08:00"
     fechada_aviso = "\n\n📅  <i>Faça seu pedido agendado para amanhã!</i>" if not aberta else ""
     return (
-        f"🏠 <b>GREEN HOUSE</b> 🌿\n"
-        f"<i>natureza · estilo · conexão · est. 2024</i>\n\n"
+        f"🏠 <b>GREEN HOUSE</b> 🌿\n\n"
         f"<i>Olá,</i> <b>{nome}</b>! ✨\n\n"
         f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
         f"{status_icon} <b>{status_label}</b>\n"
