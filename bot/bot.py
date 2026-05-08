@@ -1257,7 +1257,17 @@ def build_financeiro_overview_text() -> str:
 
     if ultimas_movs:
         msg += "\n   🕐 <b>Últimas movimentações</b>\n"
+        # Calcula saldo corrido de trás pra frente (movs estão em ordem DESC)
+        saldo_corrido = saldo
+        saldos_apos = []
         for tipo, valor, desc, pag, data_raw in ultimas_movs:
+            saldos_apos.append(saldo_corrido)
+            if tipo == "entrada":
+                saldo_corrido -= valor
+            else:
+                saldo_corrido += valor
+        # Exibe da mais antiga para a mais recente
+        for (tipo, valor, desc, pag, data_raw), saldo_apos in zip(reversed(ultimas_movs), reversed(saldos_apos)):
             try:
                 dt   = datetime.datetime.strptime(data_raw[:10], "%Y-%m-%d").strftime("%d/%m")
                 hora = data_raw[11:16] if len(data_raw) > 10 else ""
@@ -1266,9 +1276,9 @@ def build_financeiro_overview_text() -> str:
                 dt_str = data_raw[:10]
             if tipo == "entrada":
                 icone = "📲" if pag == "PIX" else "💵"
-                msg += f"   📥{icone} <b>+R$ {valor:.0f}</b>  <i>{desc}</i>  <code>{dt_str}</code>\n"
+                msg += f"   📥{icone} <b>+R$ {valor:.0f}</b>  →  R$ {saldo_apos:.0f}  <i>{desc}</i>  <code>{dt_str}</code>\n"
             else:
-                msg += f"   📤 <b>-R$ {valor:.0f}</b>  <i>{desc}</i>  <code>{dt_str}</code>\n"
+                msg += f"   📤 <b>-R$ {valor:.0f}</b>  →  R$ {saldo_apos:.0f}  <i>{desc}</i>  <code>{dt_str}</code>\n"
 
     msg += "\n━━━━━━━━━━━━━━━━━━\n"
 
