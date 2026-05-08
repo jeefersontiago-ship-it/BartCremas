@@ -1237,13 +1237,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         status_label = "Aberta agora" if aberta else "Fechada no momento"
         hora_info    = "🕐 entregas a partir das 19:30" if aberta else "🕐 abrimos às 08:00"
         nome_cliente = user.first_name or "cliente"
+        fechada_aviso = "\n📅  Você pode fazer seu pedido agendado para amanhã!" if not aberta else ""
         await update.message.reply_text(
-            f"🌿  <b>G R E E N  H O U S E</b>  🌿\n\n"
-            f"<i>Bem-vindo(a), {nome_cliente}.</i>\n\n"
-            f"Qualidade que você sente.\n"
-            f"Entrega que você confia.\n\n"
+            f"🌿  <b>G R E E N  H O U S E</b>  🌿\n"
             f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
-            f"{status_icon}  <b>{status_label}</b>  ·  {hora_info}",
+            f"✦ <i>premium  ·  discreto  ·  confiável</i> ✦\n\n"
+            f"Bem-vindo(a), <b>{nome_cliente}</b> 🌿\n\n"
+            f"{status_icon}  <b>{status_label}</b>  ·  {hora_info}"
+            f"{fechada_aviso}",
             parse_mode="HTML",
             reply_markup=customer_keyboard()
         )
@@ -2778,12 +2779,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             status_icon2  = "🟢" if aberta2 else "🔴"
             status_label2 = "Aberta agora" if aberta2 else "Fechada no momento"
             hora_info2    = "🕐 entregas a partir das 19:30" if aberta2 else "🕐 abrimos às 08:00"
+            fechada_aviso2 = "\n📅  Você pode fazer seu pedido agendado para amanhã!" if not aberta2 else ""
             await query.edit_message_text(
-                "🌿  <b>G R E E N  H O U S E</b>  🌿\n\n"
-                f"Qualidade que você sente.\n"
-                f"Entrega que você confia.\n\n"
+                "🌿  <b>G R E E N  H O U S E</b>  🌿\n"
                 "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
-                f"{status_icon2}  <b>{status_label2}</b>  ·  {hora_info2}",
+                "✦ <i>premium  ·  discreto  ·  confiável</i> ✦\n\n"
+                f"{status_icon2}  <b>{status_label2}</b>  ·  {hora_info2}"
+                f"{fechada_aviso2}",
                 parse_mode="HTML",
                 reply_markup=customer_keyboard()
             )
