@@ -1169,19 +1169,19 @@ def build_cart_text(carrinho: dict, prefixo: str = "") -> str:
     taxa     = 10.0 if 0 < subtotal < 500 else 0.0
     total    = subtotal + taxa
 
-    linhas = prefixo + "🛒  <b>C A R R I N H O</b>\n▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n\n"
+    linhas = prefixo + "🛒 <b>CARRINHO</b> · <i>Green House</i>\n▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n\n"
     tem_item = False
     for cod, (nome, preco, unidade) in PRODUTOS_INFO.items():
         qtd = carrinho.get(cod, 0)
         if qtd > 0:
             tem_item = True
-            linhas += f"  {nome}  ×{qtd}   <b>R$ {qtd * preco:.0f}</b>\n"
+            linhas += f"  <b>{nome}</b>  ×{qtd}   <b>R$ {qtd * preco:.0f}</b>\n"
     if not tem_item:
         linhas += "  <i>nenhum item ainda — use ➕</i>\n"
-    linhas += "\n━━━━━━━━━━━━━━━━━━\n"
+    linhas += "\n▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
     if taxa > 0:
-        linhas += f"  entrega: R$ {taxa:.0f}\n"
-    linhas += f"💸  <b>Total: R$ {total:.0f}</b>"
+        linhas += f"  <i>entrega: R$ {taxa:.0f}</i>\n"
+    linhas += f"💸 <b>Total: R$ {total:.0f}</b>"
     return linhas
 
 def build_cart_keyboard(carrinho: dict) -> InlineKeyboardMarkup:
@@ -1237,13 +1237,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         status_label = "Aberta agora" if aberta else "Fechada no momento"
         hora_info    = "🕐 entregas a partir das 19:30" if aberta else "🕐 abrimos às 08:00"
         nome_cliente = user.first_name or "cliente"
-        fechada_aviso = "\n📅  Você pode fazer seu pedido agendado para amanhã!" if not aberta else ""
+        fechada_aviso = "\n📅  <i>Você pode fazer seu pedido agendado para amanhã!</i>" if not aberta else ""
         await update.message.reply_text(
-            f"🌿  <b>G R E E N  H O U S E</b>  🌿\n"
+            f"🌿 <b>GREEN HOUSE</b> · <i>premium · discreto · confiável</i> 🌿\n\n"
+            f"<i>Bem-vindo(a),</i> <b>{nome_cliente}</b>\n\n"
             f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
-            f"✦ <i>premium  ·  discreto  ·  confiável</i> ✦\n\n"
-            f"Bem-vindo(a), <b>{nome_cliente}</b> 🌿\n\n"
-            f"{status_icon}  <b>{status_label}</b>  ·  {hora_info}"
+            f"{status_icon} <b>{status_label}</b> · <i>{hora_info}</i>"
             f"{fechada_aviso}",
             parse_mode="HTML",
             reply_markup=customer_keyboard()
@@ -2207,12 +2206,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ])
         if not loja_esta_aberta():
             await query.edit_message_text(
-                "🔴  <b>FECHADO AGORA</b>\n"
+                "🔴 <b>FECHADO AGORA</b>\n"
                 "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n\n"
-                "🕐 Horário de funcionamento:\n"
-                "    <b>08:00 às 19:00</b>\n\n"
-                "🌿 Mas pode deixar seu pedido agendado\n"
-                "    para entrega amanhã! 👇",
+                "🕐 <i>Horário:</i> <b>08:00 às 19:00</b>\n\n"
+                "🌿 <i>Mas pode deixar seu pedido agendado</i>\n"
+                "    <b>para entrega amanhã!</b> 👇",
                 parse_mode="HTML",
                 reply_markup=kb_agendar
             )
@@ -2392,12 +2390,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             agendado_banner = f"📅 <b>AGENDADO — entrega {dt_fmt}</b>\n━━━━━━━━━━━━━━━━━━\n\n"
         msg = (
             f"{agendado_banner}"
-            f"🖤  <b>PEDIDO FECHADO</b>\n"
-            f"━━━━━━━━━━━━━━━━━━\n\n"
+            f"🌿 <b>PEDIDO</b> · <i>Green House</i>\n"
+            f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n\n"
             f"{itens_str}\n"
-            f"━━━━━━━━━━━━━━━━━━\n"
+            f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
             f"{taxa_str}\n"
-            f"💸  <b>Total: R$ {total:.0f}</b>\n\n"
+            f"💸 <b>Total: R$ {total:.0f}</b>\n\n"
             f"👤 <b>Qual o seu nome completo?</b>\n"
             f"<i>(será usado para identificar seu pedido)</i>"
         )
@@ -2417,13 +2415,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         endereco  = pedido.get("endereco", "")
         end_str   = f"\n📍 <b>Entrega em:</b> {endereco}" if endereco and endereco != "Retirada" else ("\n🏪 <b>Retirada</b>" if endereco == "Retirada" else "")
         msg = (
-            f"🖤  <b>PEDIDO FECHADO</b>\n"
-            f"━━━━━━━━━━━━━━━━━━\n\n"
+            f"⚡ <b>PAGAMENTO VIA PIX</b> · <i>Green House</i>\n"
+            f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n\n"
             f"{itens_str}\n"
-            f"━━━━━━━━━━━━━━━━━━\n"
+            f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
             f"{taxa_str}\n"
-            f"💸  <b>Total: R$ {pedido['total']:.0f}</b>{end_str}\n\n"
-            f"⚡  <b>Pague via PIX e mande o comprovante aqui como foto 👇</b>"
+            f"💸 <b>Total: R$ {pedido['total']:.0f}</b>{end_str}\n\n"
+            f"<b>Pague via PIX e envie o comprovante aqui como foto 👇</b>\n"
+            f"<i>A chave PIX será enviada logo abaixo.</i>"
         )
         kb_pix = InlineKeyboardMarkup([
             [InlineKeyboardButton("← voltar ao carrinho", callback_data="loja_voltar_carrinho")],
@@ -2443,9 +2442,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["estado"] = "cliente_troco"
         msg = (
             f"💵 <b>PAGAMENTO EM DINHEIRO</b>\n"
-            f"━━━━━━━━━━━━━━━━━━\n\n"
-            f"💸 Total: <b>R$ {pedido['total']:.0f}</b>\n\n"
-            f"Com quanto vai pagar?\n"
+            f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n\n"
+            f"💸 <i>Total:</i> <b>R$ {pedido['total']:.0f}</b>\n\n"
+            f"<b>Com quanto vai pagar?</b>\n"
             f"<i>Digite o valor ou clique em «Valor exato»</i>"
         )
         kb = InlineKeyboardMarkup([
@@ -2566,13 +2565,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         endereco  = pedido.get("endereco", "")
         end_str   = f"\n📍 {endereco}" if endereco and endereco != "Retirada" else ("\n🏪 Retirada" if endereco == "Retirada" else "")
         msg = (
-            f"💵 <b>CONFIRMAR PEDIDO — DINHEIRO</b>\n"
-            f"━━━━━━━━━━━━━━━━━━\n\n"
+            f"💵 <b>CONFIRMAR PEDIDO</b> · <i>Dinheiro</i>\n"
+            f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n\n"
             f"{itens_str}\n"
-            f"━━━━━━━━━━━━━━━━━━\n"
+            f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
             f"{taxa_str}\n"
-            f"💸 Total: <b>R$ {pedido['total']:.0f}</b>{end_str}\n\n"
-            f"Confirma o pedido em dinheiro?"
+            f"💸 <b>Total: R$ {pedido['total']:.0f}</b>{end_str}\n\n"
+            f"<i>Confirma o pedido em dinheiro?</i>"
         )
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("✅ Confirmar pedido", callback_data="loja_confirmar_dinheiro")],
@@ -2598,11 +2597,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if status == "OK":
             kb_rows.insert(0, [InlineKeyboardButton("❌ Cancelar Pedido", callback_data=f"loja_cancelar_confirm_{ped_id}")])
         await query.edit_message_text(
-            f"📋 <b>Último Pedido</b>\n━━━━━━━━━━━━━━\n\n"
-            f"🔢 Pedido #{numero}\n"
-            f"📊 Status: {status_texto}\n"
-            f"💰 R$ {total:.0f}  {pag_emoji} {pag}\n"
-            f"🕐 {hora}{end_str}",
+            f"📋 <b>MEU PEDIDO</b> · <i>Green House</i>\n"
+            f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n\n"
+            f"🔢 <b>#{numero}</b>\n"
+            f"📊 <i>Status:</i> <b>{status_texto}</b>\n"
+            f"💰 <b>R$ {total:.0f}</b>  {pag_emoji} <i>{pag}</i>\n"
+            f"🕐 <i>{hora}</i>{end_str}",
             parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb_rows)
         )
 
@@ -2779,12 +2779,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             status_icon2  = "🟢" if aberta2 else "🔴"
             status_label2 = "Aberta agora" if aberta2 else "Fechada no momento"
             hora_info2    = "🕐 entregas a partir das 19:30" if aberta2 else "🕐 abrimos às 08:00"
-            fechada_aviso2 = "\n📅  Você pode fazer seu pedido agendado para amanhã!" if not aberta2 else ""
+            fechada_aviso2 = "\n📅  <i>Você pode fazer seu pedido agendado para amanhã!</i>" if not aberta2 else ""
             await query.edit_message_text(
-                "🌿  <b>G R E E N  H O U S E</b>  🌿\n"
-                "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
-                "✦ <i>premium  ·  discreto  ·  confiável</i> ✦\n\n"
-                f"{status_icon2}  <b>{status_label2}</b>  ·  {hora_info2}"
+                "🌿 <b>GREEN HOUSE</b> · <i>premium · discreto · confiável</i> 🌿\n\n"
+                f"{status_icon2} <b>{status_label2}</b> · <i>{hora_info2}</i>"
                 f"{fechada_aviso2}",
                 parse_mode="HTML",
                 reply_markup=customer_keyboard()
