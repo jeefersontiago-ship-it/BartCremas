@@ -1,8 +1,7 @@
-[phases.setup]
-nixPkgs = ["python311", "gcc"]
+providers = ["python"]
 
 [phases.install]
-cmds = ["pip install -r requirements.txt"]
+cmds = ["python3 -m pip install -r requirements.txt"]
 
 [start]
-cmd = "python bot/bot.py"
+cmd = "python3 bot/bot.py"
