@@ -35,6 +35,10 @@ def get_ai_client():
 # Pedidos de clientes aguardando confirmação de pagamento (em memória)
 pedidos_pendentes: dict = {}  # customer_chat_id -> order_data
 
+# Cache do file_id da logo para não re-enviar o arquivo a cada mensagem
+LOGO_FILE_ID: str | None = None
+LOGO_PATH = os.path.join(os.path.dirname(__file__), "logo.png")
+
 PRODUTOS_INFO = {
     "ICE":     ("🍦 Ice Cream Cake",  140.0, "g"),
     "PAK":     ("🥐 Pak Nutella",      60.0, "g"),
@@ -1204,6 +1208,37 @@ def build_cart_keyboard(carrinho: dict) -> InlineKeyboardMarkup:
 
 # ====================== COMANDOS ======================
 
+def build_welcome_caption(nome: str, aberta: bool) -> str:
+    status_icon  = "🟢" if aberta else "🔴"
+    status_label = "Aberta agora" if aberta else "Fechada no momento"
+    hora_info    = "entregas a partir das 19:30" if aberta else "abrimos às 08:00"
+    fechada_aviso = "\n\n📅  <i>Faça seu pedido agendado para amanhã!</i>" if not aberta else ""
+    return (
+        f"🏠 <b>GREEN HOUSE</b> 🌿\n"
+        f"<i>natureza · estilo · conexão · est. 2024</i>\n\n"
+        f"<i>Olá,</i> <b>{nome}</b>! ✨\n\n"
+        f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
+        f"{status_icon} <b>{status_label}</b>\n"
+        f"<i>🕐 {hora_info}</i>"
+        f"{fechada_aviso}"
+    )
+
+async def send_welcome_photo(bot, chat_id: int, nome: str, aberta: bool):
+    global LOGO_FILE_ID
+    caption  = build_welcome_caption(nome, aberta)
+    keyboard = customer_keyboard()
+    if LOGO_FILE_ID:
+        msg = await bot.send_photo(chat_id=chat_id, photo=LOGO_FILE_ID,
+                                   caption=caption, parse_mode="HTML",
+                                   reply_markup=keyboard)
+    else:
+        with open(LOGO_PATH, "rb") as f:
+            msg = await bot.send_photo(chat_id=chat_id, photo=f,
+                                       caption=caption, parse_mode="HTML",
+                                       reply_markup=keyboard)
+        LOGO_FILE_ID = msg.photo[-1].file_id
+    return msg
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     user = update.effective_user
@@ -1232,21 +1267,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     else:
         registrar_cliente(user.id, user.username or "", user.first_name or "")
-        aberta       = loja_esta_aberta()
-        status_icon  = "🟢" if aberta else "🔴"
-        status_label = "Aberta agora" if aberta else "Fechada no momento"
-        hora_info    = "🕐 entregas a partir das 19:30" if aberta else "🕐 abrimos às 08:00"
         nome_cliente = user.first_name or "cliente"
-        fechada_aviso = "\n📅  <i>Você pode fazer seu pedido agendado para amanhã!</i>" if not aberta else ""
-        await update.message.reply_text(
-            f"🌿 <b>GREEN HOUSE</b> · <i>natureza · estilo · conexão</i> 🌿\n\n"
-            f"<i>Bem-vindo(a),</i> <b>{nome_cliente}</b>\n\n"
-            f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
-            f"{status_icon} <b>{status_label}</b> · <i>{hora_info}</i>"
-            f"{fechada_aviso}",
-            parse_mode="HTML",
-            reply_markup=customer_keyboard()
-        )
+        aberta       = loja_esta_aberta()
+        await send_welcome_photo(update.message.bot, update.effective_chat.id,
+                                 nome_cliente, aberta)
 
 async def cmd_estoque(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -2775,18 +2799,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=socio_keyboard()
             )
         else:
-            aberta2       = loja_esta_aberta()
-            status_icon2  = "🟢" if aberta2 else "🔴"
-            status_label2 = "Aberta agora" if aberta2 else "Fechada no momento"
-            hora_info2    = "🕐 entregas a partir das 19:30" if aberta2 else "🕐 abrimos às 08:00"
-            fechada_aviso2 = "\n📅  <i>Você pode fazer seu pedido agendado para amanhã!</i>" if not aberta2 else ""
-            await query.edit_message_text(
-                "🌿 <b>GREEN HOUSE</b> · <i>natureza · estilo · conexão</i> 🌿\n\n"
-                f"{status_icon2} <b>{status_label2}</b> · <i>{hora_info2}</i>"
-                f"{fechada_aviso2}",
-                parse_mode="HTML",
-                reply_markup=customer_keyboard()
-            )
+            nome2   = query.from_user.first_name or "cliente"
+            aberta2 = loja_esta_aberta()
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+            await send_welcome_photo(context.bot, query.message.chat_id, nome2, aberta2)
 
     elif query.data == "loja_cancelar":
         context.user_data.clear()
