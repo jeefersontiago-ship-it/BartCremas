@@ -1,0 +1,8 @@
+node_modules
+artifacts/*/node_modules
+artifacts/*/dist
+artifacts/*/.cache
+.git
+attached_assets
+*.log
+pnpm-lock.yaml
