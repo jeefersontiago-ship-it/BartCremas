@@ -1241,9 +1241,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🌿  <b>G R E E N  H O U S E</b>  🌿\n"
             f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
             f"✦ <i>premium  ·  discreto  ·  confiável</i> ✦\n\n"
-            f"Olá, <b>{nome_cliente}</b>! 👋\n\n"
-            f"{status_icon}  <b>{status_label}</b>\n"
-            f"{hora_info}",
+            f"Olá, <b>{nome_cliente}</b>! 👋 Seja bem-vindo(a).\n\n"
+            f"<b>Como funciona:</b>\n"
+            f"1️⃣  Toque em <b>Ver Cardápio</b> e conheça nossos produtos\n"
+            f"2️⃣  Toque em <b>Fazer Pedido</b> e monte seu carrinho\n"
+            f"3️⃣  Informe seu endereço ou escolha retirada\n"
+            f"4️⃣  Pague via <b>PIX</b> ou <b>Dinheiro</b>\n"
+            f"5️⃣  Receba em casa rapidinho 🚚\n\n"
+            f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
+            f"{status_icon}  <b>{status_label}</b>  ·  {hora_info}",
             parse_mode="HTML",
             reply_markup=customer_keyboard()
         )
@@ -2268,19 +2274,30 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         c.execute("SELECT codigo, nome, preco_venda, estoque FROM produtos ORDER BY codigo")
         rows = c.fetchall()
         conn.close()
-        fotos   = load_fotos()
-        media   = []
+        fotos    = load_fotos()
+        media    = []
         sem_foto = ""
         for cod, nome, preco, estoque in rows:
             if cod not in PRODUTOS_INFO:
                 continue
-            unidade = PRODUTOS_INFO[cod][2]
-            status  = "🟢" if estoque > 0 else "🔴 esgotado"
+            unidade    = PRODUTOS_INFO[cod][2]
+            disp       = estoque > 0
+            status_ico = "🟢" if disp else "🔴"
+            disp_txt   = "Disponível" if disp else "Esgotado"
             if cod in fotos:
-                caption = f"{status}  <b>{nome}</b>\n💰 R$ {preco:.0f}/{unidade}"
+                caption = (
+                    f"╔══ 🌿 GREEN HOUSE 🌿 ══╗\n\n"
+                    f"  <b>{nome}</b>\n\n"
+                    f"  💰 <b>R$ {preco:.0f}</b> / {unidade}\n"
+                    f"  {status_ico} {disp_txt}\n\n"
+                    f"╚═══════════════════╝"
+                )
                 media.append(InputMediaPhoto(fotos[cod], caption=caption, parse_mode="HTML"))
             else:
-                sem_foto += f"{status}  {nome}\n    R$ {preco:.0f}/{unidade}\n\n"
+                sem_foto += (
+                    f"{status_ico}  <b>{nome}</b>\n"
+                    f"    💰 R$ {preco:.0f}/{unidade}\n\n"
+                )
         entrega = is_entregador(query.from_user)
         if entrega:
             kb = InlineKeyboardMarkup([
@@ -2289,12 +2306,18 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ])
         else:
             kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🛒  pedir agora", callback_data="loja_iniciar")],
-                [InlineKeyboardButton("← voltar",        callback_data="loja_menu")],
+                [InlineKeyboardButton("🛒  Fazer Pedido", callback_data="loja_iniciar")],
+                [InlineKeyboardButton("🏠  Voltar",        callback_data="loja_menu")],
             ])
         if media:
             await context.bot.send_media_group(chat_id=query.message.chat_id, media=media)
-        header = "📦  <b>C A R D Á P I O</b>\n▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n✦ <i>Green House  ·  premium</i> ✦\n\n"
+        header = (
+            "╔══════════════════╗\n"
+            "║  🌿  <b>GREEN HOUSE</b>  🌿  ║\n"
+            "║   <b>C A R D Á P I O</b>    ║\n"
+            "╚══════════════════╝\n"
+            "✦ <i>premium · exclusivo · confiável</i> ✦\n\n"
+        )
         await query.edit_message_text(
             header + sem_foto if sem_foto else header.rstrip(),
             parse_mode="HTML", reply_markup=kb)
