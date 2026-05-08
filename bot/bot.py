@@ -739,7 +739,7 @@ def build_admin_header() -> str:
     n_pix = len(pedidos_pendentes)
     loja_status = "🟢 Aberta" if loja_esta_aberta() else "🔴 Fechada"
     hora_atual  = datetime.datetime.now().strftime("%H:%M")
-    msg  = f"🌿 <b>THE GREEN STREET</b>\n"
+    msg  = f"🌿 <b>GREEN HOUSE</b>\n"
     msg += f"━━━━━━━━━━━━━━━━━━\n"
     msg += f"🏪 {loja_status}  |  🕐 {hora_atual}\n"
     msg += f"━━━━━━━━━━━━━━━━━━\n"
@@ -1233,7 +1233,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         registrar_cliente(user.id, user.username or "", user.first_name or "")
         await update.message.reply_text(
-            "🌿  <b>THE GREEN STREET</b>\n"
+            "🌿  <b>GREEN HOUSE</b>\n"
             "━━━━━━━━━━━━━━━━━━\n"
             "entrega a partir das 19:30",
             parse_mode="HTML",
@@ -2877,7 +2877,7 @@ async def handle_admin_ai(update: Update, context: ContextTypes.DEFAULT_TYPE, te
     loja_status = "aberta" if loja_esta_aberta() else "fechada"
     estoque_str = "\n".join(f"  {cod} ({nome}): {est:.1f} un · R${preco:.0f}" for cod, nome, est, preco in produtos)
 
-    system = f"""Você é o assistente de controle de estoque e caixa da The Green Street.
+    system = f"""Você é o assistente de controle de estoque e caixa da Green House.
 Estado atual:
 - Loja: {loja_status}
 - Saldo banco: R$ {saldo_banco:.0f}

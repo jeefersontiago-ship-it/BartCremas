@@ -1,4 +1,4 @@
-# The Green Street Bot
+# Green House Bot
 
 Telegram bot para controle de estoque e pedidos de cannabis — clientes pedem pelo bot, admin confirma, entregador é notificado.
 
