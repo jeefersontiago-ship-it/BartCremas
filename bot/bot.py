@@ -4,6 +4,8 @@ import datetime
 import re
 import os
 import json
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from zoneinfo import ZoneInfo
 from openai import OpenAI
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
@@ -38,6 +40,17 @@ pedidos_pendentes: dict = {}  # customer_chat_id -> order_data
 # Cache do file_id da logo para não re-enviar o arquivo a cada mensagem
 LOGO_FILE_ID: str | None = None
 LOGO_PATH = os.path.join(os.path.dirname(__file__), "logo.png")
+
+async def safe_edit(query, text: str, **kwargs):
+    """edit_message_text que funciona mesmo quando a mensagem original é uma foto."""
+    if query.message.photo:
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+        await query.message.chat.send_message(text, **kwargs)
+    else:
+        await query.edit_message_text(text, **kwargs)
 
 PRODUTOS_INFO = {
     "ICE":     ("🍦 Ice Cream Cake",  140.0, "g"),
@@ -2228,7 +2241,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("← Voltar", callback_data="loja_menu")],
         ])
         if not loja_esta_aberta():
-            await query.edit_message_text(
+            await safe_edit(query,
                 "🔴 <b>FECHADO AGORA</b>\n"
                 "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n\n"
                 "🕐 <i>Horário:</i> <b>08:00 às 19:00</b>\n\n"
@@ -2248,7 +2261,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             qtd_hoje = c_lim.fetchone()[0]; conn_lim.close()
             if qtd_hoje >= 10:
-                await query.edit_message_text(
+                await safe_edit(query,
                     "🚫 <b>Limite de pedidos atingido!</b>\n"
                     "━━━━━━━━━━━━━━━━━━\n\n"
                     "Aceitamos no máximo <b>10 pedidos por dia</b>.\n\n"
@@ -2262,7 +2275,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["carrinho"] = {c: 0 for c in PRODUTOS_INFO}
         context.user_data["estado"]   = "cliente_carrinho"
         carrinho = context.user_data["carrinho"]
-        await query.edit_message_text(
+        await safe_edit(query,
             build_cart_text(carrinho),
             parse_mode="HTML",
             reply_markup=build_cart_keyboard(carrinho)
@@ -2334,7 +2347,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "╚══════════════════╝\n"
             "✦ <i>premium · exclusivo · confiável</i> ✦\n\n"
         )
-        await query.edit_message_text(
+        await safe_edit(query,
             header + sem_foto if sem_foto else header.rstrip(),
             parse_mode="HTML", reply_markup=kb)
 
@@ -2609,7 +2622,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         row = c.fetchone(); conn.close()
         kb_vol = InlineKeyboardMarkup([[InlineKeyboardButton("← Voltar", callback_data="loja_menu")]])
         if not row:
-            await query.edit_message_text("📋 Nenhum pedido encontrado.\n\nFaça seu primeiro pedido! 🛒", reply_markup=kb_vol)
+            await safe_edit(query, "📋 Nenhum pedido encontrado.\n\nFaça seu primeiro pedido! 🛒", reply_markup=kb_vol)
             return
         ped_id, numero, total, pag, status, data, endereco = row
         pag_emoji    = "📲" if pag == "PIX" else "💵"
@@ -2619,7 +2632,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         kb_rows = [[InlineKeyboardButton("← Voltar", callback_data="loja_menu")]]
         if status == "OK":
             kb_rows.insert(0, [InlineKeyboardButton("❌ Cancelar Pedido", callback_data=f"loja_cancelar_confirm_{ped_id}")])
-        await query.edit_message_text(
+        await safe_edit(query,
             f"📋 <b>MEU PEDIDO</b> · <i>Green House</i>\n"
             f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n\n"
             f"🔢 <b>#{numero}</b>\n"
@@ -3588,6 +3601,22 @@ def main():
     jq.run_daily(job_fechar_loja,       datetime.time(19,  0, 0, tzinfo=BR_TZ))
     # Checagem de estoque às 07:30 (antes da abertura)
     jq.run_daily(job_verificar_estoque, datetime.time( 7, 30, 0, tzinfo=BR_TZ))
+
+    # Servidor HTTP mínimo para health check no deploy (só inicia se PORT estiver definido)
+    if os.getenv("PORT"):
+        class _HealthHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"OK")
+            def log_message(self, *args):
+                pass
+        def _start_health():
+            try:
+                HTTPServer(("0.0.0.0", int(os.environ["PORT"])), _HealthHandler).serve_forever()
+            except Exception:
+                pass
+        threading.Thread(target=_start_health, daemon=True).start()
 
     logging.info("Bot iniciado...")
     app.run_polling()
