@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "Green House Bot"
+version = "1.0.0"
+id = "artifacts/status"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 25104
+
+[services.development]
+run = "pnpm --filter @workspace/status run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/status", "run", "build" ]
+publicDir = "artifacts/status/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "25104"
+BASE_PATH = "/"
