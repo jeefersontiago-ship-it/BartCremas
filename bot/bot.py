@@ -2467,7 +2467,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(msg, parse_mode="HTML", reply_markup=kb_pix)
         await context.bot.send_message(
             chat_id=query.message.chat_id,
-            text=f"<code>{CHAVE_PIX}</code>",
+            text=(
+                f"📲 <b>Chave PIX</b>\n"
+                f"<code>{CHAVE_PIX}</code>\n\n"
+                f"👤 <i>Gabriel Graboski</i>\n"
+                f"🏦 <i>Banco Neon</i>"
+            ),
             parse_mode="HTML"
         )
 
