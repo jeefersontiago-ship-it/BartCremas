@@ -1152,6 +1152,109 @@ def build_lucro_text() -> str:
         msg += f"📊 Falta faturar: R$ {abs(lucro_proj):.0f} para cobrir o fornecedor\n"
     return msg
 
+def build_financeiro_overview_text() -> str:
+    """Painel financeiro completo: dia, histórico, banco, dívida, estoque, projeção."""
+    hoje     = datetime.date.today().strftime("%Y-%m-%d")
+    saldo    = get_config("saldo_banco")
+    divida   = get_config("divida_fornecedor")
+    conn = get_db(); c = conn.cursor()
+
+    # ── Hoje ──────────────────────────────────────────────────────────────
+    c.execute("SELECT tipo, COALESCE(SUM(valor),0) FROM caixa WHERE data LIKE ? GROUP BY tipo", (f"{hoje}%",))
+    caixa_hoje = dict(c.fetchall())
+    ent_hoje = caixa_hoje.get("entrada", 0.0)
+    sai_hoje = caixa_hoje.get("saida",   0.0)
+    saldo_dia = ent_hoje - sai_hoje
+
+    c.execute("""SELECT COALESCE(pagamento,'PIX'), COALESCE(SUM(valor),0)
+                 FROM caixa WHERE tipo='entrada' AND data LIKE ?
+                 GROUP BY COALESCE(pagamento,'PIX')""", (f"{hoje}%",))
+    pag_hoje = dict(c.fetchall())
+    pix_h = pag_hoje.get("PIX", 0.0)
+    din_h = pag_hoje.get("DINHEIRO", 0.0)
+
+    c.execute("SELECT COUNT(*), COALESCE(SUM(total),0) FROM pedidos WHERE data LIKE ? AND status NOT IN ('CANCELADO')", (f"{hoje}%",))
+    qtd_hoje, fat_hoje = c.fetchone()
+
+    # ── Histórico total ──────────────────────────────────────────────────
+    c.execute("SELECT COALESCE(SUM(valor),0) FROM caixa WHERE tipo='entrada'")
+    tot_ent = c.fetchone()[0]
+    c.execute("SELECT COALESCE(SUM(valor),0) FROM caixa WHERE tipo='saida'")
+    tot_sai = c.fetchone()[0]
+
+    c.execute("""SELECT COALESCE(pagamento,'PIX'), COALESCE(SUM(valor),0)
+                 FROM caixa WHERE tipo='entrada'
+                 GROUP BY COALESCE(pagamento,'PIX')""")
+    pag_tot = dict(c.fetchall())
+    pix_tot = pag_tot.get("PIX", 0.0)
+    din_tot = pag_tot.get("DINHEIRO", 0.0)
+
+    c.execute("SELECT COALESCE(SUM(valor),0) FROM retiradas")
+    tot_ret = c.fetchone()[0]
+
+    # ── Estoque (valor potencial restante) ───────────────────────────────
+    c.execute("SELECT nome, estoque, preco_venda FROM produtos WHERE estoque > 0")
+    prods = c.fetchall()
+    val_estoque = sum(est * preco for _, est, preco in prods)
+    conn.close()
+
+    # ── Cálculo projeção ─────────────────────────────────────────────────
+    tot_recebido = tot_ent  # total já entrou no caixa
+    lucro_proj   = (tot_recebido + val_estoque) - divida
+    por_socio    = lucro_proj / 2
+
+    msg  = "💸 <b>FINANCEIRO</b>\n"
+    msg += "━━━━━━━━━━━━━━━━━━\n\n"
+
+    # Hoje
+    msg += f"📅 <b>HOJE</b>  ({qtd_hoje} pedido(s)  ·  R$ {fat_hoje:.0f} faturado)\n"
+    if pix_h:  msg += f"   📲 PIX: <b>R$ {pix_h:.0f}</b>\n"
+    if din_h:  msg += f"   💵 Dinheiro: <b>R$ {din_h:.0f}</b>\n"
+    if sai_hoje: msg += f"   📤 Saídas: <b>-R$ {sai_hoje:.0f}</b>\n"
+    cor = "+" if saldo_dia >= 0 else ""
+    msg += f"   💵 Saldo do dia: <b>{cor}R$ {saldo_dia:.0f}</b>\n"
+
+    msg += "\n━━━━━━━━━━━━━━━━━━\n"
+
+    # Histórico total de caixa
+    msg += "\n📊 <b>TOTAL GERAL (histórico)</b>\n"
+    msg += f"   📥 Entradas: <b>R$ {tot_ent:.0f}</b>\n"
+    if pix_tot: msg += f"      📲 PIX: R$ {pix_tot:.0f}\n"
+    if din_tot: msg += f"      💵 Dinheiro: R$ {din_tot:.0f}\n"
+    msg += f"   📤 Saídas: <b>R$ {tot_sai:.0f}</b>\n"
+    if tot_ret: msg += f"      💰 Retiradas: R$ {tot_ret:.0f}\n"
+    saldo_caixa = tot_ent - tot_sai
+    msg += f"   💵 Saldo caixa: <b>R$ {saldo_caixa:.0f}</b>\n"
+
+    msg += "\n━━━━━━━━━━━━━━━━━━\n"
+
+    # Banco e dívida
+    msg += "\n🏦 <b>BANCO & FORNECEDOR</b>\n"
+    msg += f"   🏦 Saldo Banco: <b>R$ {saldo:.2f}</b>\n"
+    if divida > 0:
+        msg += f"   🏭 Dívida Fornecedor: <b>R$ {divida:.0f}</b>\n"
+        patrimonio = saldo - divida
+        sinal = "+" if patrimonio >= 0 else ""
+        msg += f"   📊 Patrimônio líquido: <b>{sinal}R$ {patrimonio:.0f}</b>\n"
+
+    msg += "\n━━━━━━━━━━━━━━━━━━\n"
+
+    # Projeção
+    msg += "\n🔮 <b>PROJEÇÃO (estoque restante)</b>\n"
+    for nome, est, preco in prods:
+        msg += f"   {nome}: {est:.0f} × R${preco:.0f} = <b>R$ {est*preco:.0f}</b>\n"
+    msg += f"   💎 Valor em estoque: <b>R$ {val_estoque:.0f}</b>\n"
+    msg += "\n"
+    if lucro_proj >= 0:
+        msg += f"   💵 Lucro líquido projetado: <b>R$ {lucro_proj:.0f}</b>\n"
+        msg += f"   👤 Por sócio (÷2): <b>R$ {por_socio:.0f}</b>\n"
+    else:
+        msg += f"   ⚠️ Ainda no prejuízo: <b>-R$ {abs(lucro_proj):.0f}</b>\n"
+        msg += f"   📊 Falta faturar: R$ {abs(lucro_proj):.0f}\n"
+
+    return msg
+
+
 def admin_financeiro_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("💰 Retiradas Bart & RD", callback_data="retiradas_menu")],
@@ -1982,12 +2085,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "admin_menu_financeiro":
         if not is_admin(query.from_user.id):
             await query.answer("❌ Acesso negado.", show_alert=True); return
-        saldo   = get_config("saldo_banco")
-        divida  = get_config("divida_fornecedor")
         await query.edit_message_text(
-            f"💸 <b>FINANCEIRO</b>\n━━━━━━━━━━━━━━━━━━\n"
-            f"🏦 Banco: <b>R$ {saldo:.2f}</b>\n"
-            f"🏭 Fornecedor: <b>R$ {divida:.2f}</b>",
+            build_financeiro_overview_text(),
             parse_mode="HTML", reply_markup=admin_financeiro_keyboard())
 
     elif query.data == "admin_cancelar":
