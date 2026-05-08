@@ -1,6 +1,6 @@
-# Diesel Farm Bot
+# The Green Street Bot
 
-Telegram bot (@bartcontrole_bot) para controle de estoque e pedidos de cannabis — clientes pedem pelo bot, admin confirma, entregador é notificado.
+Telegram bot para controle de estoque e pedidos de cannabis — clientes pedem pelo bot, admin confirma, entregador é notificado.
 
 ## Run & Operate
 
