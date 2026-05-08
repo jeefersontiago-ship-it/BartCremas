@@ -24,6 +24,24 @@ CHAVE_PIX            = os.getenv("CHAVE_PIX", "")
 DB_PATH              = os.path.join(os.path.dirname(__file__), "controle.db")
 ENTREGADOR_USERNAME  = "@jRDG7"
 
+def get_entregador_chat_id():
+    """Retorna o chat_id numérico do entregador (salvo quando ele deu /start), ou o username como fallback."""
+    conn = get_db(); c = conn.cursor()
+    c.execute("SELECT valor FROM config WHERE chave='entregador_chat_id'")
+    row = c.fetchone(); conn.close()
+    if row:
+        try:
+            return int(row[0])
+        except Exception:
+            pass
+    return ENTREGADOR_USERNAME
+
+def save_entregador_chat_id(chat_id: int):
+    """Salva o chat_id numérico do entregador no banco para uso em notificações."""
+    conn = get_db(); c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO config(chave, valor) VALUES('entregador_chat_id', ?)", (str(chat_id),))
+    conn.commit(); conn.close()
+
 _ai_client = None
 def get_ai_client():
     global _ai_client
@@ -1407,6 +1425,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=main_keyboard()
         )
     elif is_entregador(user):
+        save_entregador_chat_id(user.id)
         hoje = datetime.date.today().strftime("%Y-%m-%d")
         conn = get_db(); c = conn.cursor()
         c.execute("SELECT COUNT(*) FROM pedidos WHERE data LIKE ? AND status='OK' AND responsavel='Loja-Bot'", (f"{hoje}%",))
@@ -1845,7 +1864,7 @@ async def handle_comprovante(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # Notificar entregador que um pedido entrou (aguardando confirmação)
     try:
         await context.bot.send_message(
-            chat_id=ENTREGADOR_USERNAME,
+            chat_id=get_entregador_chat_id(),
             text=(
                 f"📥 <b>PEDIDO RECEBIDO</b>\n"
                 f"━━━━━━━━━━━━━━\n"
@@ -2692,7 +2711,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         try:
             await context.bot.send_message(
-                chat_id=ENTREGADOR_USERNAME,
+                chat_id=get_entregador_chat_id(),
                 text=(
                     f"{'📅 ENTREGA AGENDADA!' if agendado else '📥 PEDIDO — DINHEIRO'}\n"
                     f"━━━━━━━━━━━━━━\n"
@@ -3021,7 +3040,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         titulo_entregador = "📅 ENTREGA AGENDADA!" if agendado else "🚚 NOVA ENTREGA!"
         try:
             await context.bot.send_message(
-                chat_id=ENTREGADOR_USERNAME,
+                chat_id=get_entregador_chat_id(),
                 text=(
                     f"{titulo_entregador}\n"
                     f"━━━━━━━━━━━━━━\n"
@@ -3645,7 +3664,7 @@ async def job_fechar_loja(context: ContextTypes.DEFAULT_TYPE):
         resumo = "\n".join(linhas)
         try:
             await context.bot.send_message(
-                chat_id=ENTREGADOR_USERNAME,
+                chat_id=get_entregador_chat_id(),
                 text=(
                     f"📋 <b>CLIENTES DO DIA — {hoje}</b>\n"
                     f"━━━━━━━━━━━━━━\n\n"
