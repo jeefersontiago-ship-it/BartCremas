@@ -1192,6 +1192,13 @@ def build_financeiro_overview_text() -> str:
     c.execute("SELECT COALESCE(SUM(valor),0) FROM retiradas")
     tot_ret = c.fetchone()[0]
 
+    # ── Últimas movimentações do caixa ───────────────────────────────────
+    c.execute("""
+        SELECT tipo, valor, descricao, COALESCE(pagamento,'PIX'), data FROM caixa
+        ORDER BY id DESC LIMIT 10
+    """)
+    ultimas_movs = c.fetchall()
+
     # ── Estoque (valor potencial restante) ───────────────────────────────
     c.execute("SELECT nome, estoque, preco_venda FROM produtos WHERE estoque > 0")
     prods = c.fetchall()
@@ -1236,6 +1243,32 @@ def build_financeiro_overview_text() -> str:
         patrimonio = saldo - divida
         sinal = "+" if patrimonio >= 0 else ""
         msg += f"   📊 Patrimônio líquido: <b>{sinal}R$ {patrimonio:.0f}</b>\n"
+
+    msg += "\n   📥 <b>Entradas acumuladas</b>\n"
+    if pix_tot:  msg += f"      📲 PIX: R$ {pix_tot:.0f}\n"
+    if din_tot:  msg += f"      💵 Dinheiro: R$ {din_tot:.0f}\n"
+    msg += f"      Total: <b>R$ {tot_ent:.0f}</b>\n"
+    msg += f"   📤 <b>Saídas acumuladas: R$ {tot_sai:.0f}</b>\n"
+    if tot_ret:
+        msg += f"      💰 Retiradas: R$ {tot_ret:.0f}\n"
+    saidas_sem_ret = tot_sai - tot_ret
+    if saidas_sem_ret > 0:
+        msg += f"      💸 Outras saídas: R$ {saidas_sem_ret:.0f}\n"
+
+    if ultimas_movs:
+        msg += "\n   🕐 <b>Últimas movimentações</b>\n"
+        for tipo, valor, desc, pag, data_raw in ultimas_movs:
+            try:
+                dt   = datetime.datetime.strptime(data_raw[:10], "%Y-%m-%d").strftime("%d/%m")
+                hora = data_raw[11:16] if len(data_raw) > 10 else ""
+                dt_str = f"{dt} {hora}".strip()
+            except Exception:
+                dt_str = data_raw[:10]
+            if tipo == "entrada":
+                icone = "📲" if pag == "PIX" else "💵"
+                msg += f"   📥{icone} <b>+R$ {valor:.0f}</b>  <i>{desc}</i>  <code>{dt_str}</code>\n"
+            else:
+                msg += f"   📤 <b>-R$ {valor:.0f}</b>  <i>{desc}</i>  <code>{dt_str}</code>\n"
 
     msg += "\n━━━━━━━━━━━━━━━━━━\n"
 
