@@ -1152,9 +1152,9 @@ def admin_financeiro_keyboard():
 
 def customer_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🛒  pedir agora",     callback_data="loja_iniciar")],
-        [InlineKeyboardButton("📦  ver cardápio",    callback_data="loja_produtos")],
-        [InlineKeyboardButton("📋  meu pedido",      callback_data="loja_status")],
+        [InlineKeyboardButton("🛒  Fazer Pedido",    callback_data="loja_iniciar")],
+        [InlineKeyboardButton("📦  Ver Cardápio",    callback_data="loja_produtos")],
+        [InlineKeyboardButton("📋  Meu Pedido",      callback_data="loja_status")],
     ])
 
 def socio_keyboard():
@@ -1169,7 +1169,7 @@ def build_cart_text(carrinho: dict, prefixo: str = "") -> str:
     taxa     = 10.0 if 0 < subtotal < 500 else 0.0
     total    = subtotal + taxa
 
-    linhas = prefixo + "🛒  <b>CARRINHO</b>\n━━━━━━━━━━━━━━━━━━\n\n"
+    linhas = prefixo + "🛒  <b>C A R R I N H O</b>\n▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n\n"
     tem_item = False
     for cod, (nome, preco, unidade) in PRODUTOS_INFO.items():
         qtd = carrinho.get(cod, 0)
@@ -1232,10 +1232,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     else:
         registrar_cliente(user.id, user.username or "", user.first_name or "")
+        aberta       = loja_esta_aberta()
+        status_icon  = "🟢" if aberta else "🔴"
+        status_label = "Aberta agora" if aberta else "Fechada no momento"
+        hora_info    = "🕐 entregas a partir das 19:30" if aberta else "🕐 abrimos às 08:00"
+        nome_cliente = user.first_name or "cliente"
         await update.message.reply_text(
-            "🌿  <b>GREEN HOUSE</b>\n"
-            "━━━━━━━━━━━━━━━━━━\n"
-            "entrega a partir das 19:30",
+            f"🌿  <b>G R E E N  H O U S E</b>  🌿\n"
+            f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
+            f"✦ <i>premium  ·  discreto  ·  confiável</i> ✦\n\n"
+            f"Olá, <b>{nome_cliente}</b>! 👋\n\n"
+            f"{status_icon}  <b>{status_label}</b>\n"
+            f"{hora_info}",
             parse_mode="HTML",
             reply_markup=customer_keyboard()
         )
@@ -2198,11 +2206,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ])
         if not loja_esta_aberta():
             await query.edit_message_text(
-                "🔴 <b>Estamos fechados agora.</b>\n"
-                "━━━━━━━━━━━━━━━━━━\n\n"
-                "🕐 Horário: <b>08:00 às 19:00</b>\n\n"
-                "Mas você pode deixar um pedido agendado\n"
-                "para entrega amanhã!",
+                "🔴  <b>FECHADO AGORA</b>\n"
+                "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n\n"
+                "🕐 Horário de funcionamento:\n"
+                "    <b>08:00 às 19:00</b>\n\n"
+                "🌿 Mas pode deixar seu pedido agendado\n"
+                "    para entrega amanhã! 👇",
                 parse_mode="HTML",
                 reply_markup=kb_agendar
             )
@@ -2285,7 +2294,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ])
         if media:
             await context.bot.send_media_group(chat_id=query.message.chat_id, media=media)
-        header = "📦  <b>CARDÁPIO</b>\n━━━━━━━━━━━━━━━━━━\n\n"
+        header = "📦  <b>C A R D Á P I O</b>\n▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n✦ <i>Green House  ·  premium</i> ✦\n\n"
         await query.edit_message_text(
             header + sem_foto if sem_foto else header.rstrip(),
             parse_mode="HTML", reply_markup=kb)
@@ -2748,10 +2757,16 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=socio_keyboard()
             )
         else:
+            aberta2       = loja_esta_aberta()
+            status_icon2  = "🟢" if aberta2 else "🔴"
+            status_label2 = "Aberta agora" if aberta2 else "Fechada no momento"
+            hora_info2    = "🕐 entregas a partir das 19:30" if aberta2 else "🕐 abrimos às 08:00"
             await query.edit_message_text(
-                "🖤  <b>STORE</b>\n"
-                "━━━━━━━━━━━━━━━━━━\n"
-                "entrega a partir das 19:30",
+                "🌿  <b>G R E E N  H O U S E</b>  🌿\n"
+                "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
+                "✦ <i>premium  ·  discreto  ·  confiável</i> ✦\n\n"
+                f"{status_icon2}  <b>{status_label2}</b>\n"
+                f"{hora_info2}",
                 parse_mode="HTML",
                 reply_markup=customer_keyboard()
             )
