@@ -29,7 +29,7 @@ outputType = "console"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "python bot/bot.py"
+args = "echo 'Bot rodando no Railway - nao iniciar aqui'"
 
 [agent]
 stack = "PNPM_WORKSPACE"
