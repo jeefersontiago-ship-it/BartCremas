@@ -3539,7 +3539,7 @@ async def job_verificar_estoque(context: ContextTypes.DEFAULT_TYPE):
 
 # ====================== MAIN ======================
 
-FOTOS_LOCAL_DIR = os.path.join(os.path.dirname(__file__), "fotos_local")
+FOTOS_LOCAL_DIR = os.path.join(os.path.dirname(__file__), "fotos_com_moldura")
 
 async def upload_local_fotos(app):
     """Sobe fotos locais ao Telegram na inicialização e guarda os file_ids."""
